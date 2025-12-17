@@ -2,7 +2,7 @@ export type LLMProviderName = "mock" | "openai" | "azure_openai" | "anthropic" |
 
 export type LLMStage = "llm1" | "llm2";
 
-import type { ZodType } from "zod";
+import type { ZodType, ZodTypeDef } from "zod";
 import type { Config } from "../config";
 import { AnthropicProvider } from "./providers/anthropicProvider";
 import { AzureOpenAIProvider } from "./providers/azureOpenAIProvider";
@@ -31,7 +31,7 @@ export type LLMCompleteJSONArgs<T> = {
   stage: LLMStage;
   system: string;
   prompt: string;
-  schema: ZodType<T, any, unknown>;
+  schema: ZodType<T, ZodTypeDef, unknown>;
   timeoutMs: number;
 };
 

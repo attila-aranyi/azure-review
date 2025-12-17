@@ -40,6 +40,10 @@ function extractJsonFromText(text: string): unknown {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 export class AzureOpenAIProvider implements LLMClient {
   private readonly endpoint: string;
   private readonly apiKey: string;
@@ -96,8 +100,14 @@ export class AzureOpenAIProvider implements LLMClient {
           throw err;
         }
 
-        const json = JSON.parse(text) as any;
-        const content = json?.choices?.[0]?.message?.content;
+        const json = JSON.parse(text) as unknown;
+        let content: unknown;
+        if (isRecord(json) && Array.isArray(json.choices) && json.choices.length > 0) {
+          const first = json.choices[0];
+          if (isRecord(first) && isRecord(first.message)) {
+            content = first.message.content;
+          }
+        }
         if (typeof content !== "string") {
           throw new AzureOpenAIProviderError("Azure OpenAI response missing message content", { cause: json });
         }

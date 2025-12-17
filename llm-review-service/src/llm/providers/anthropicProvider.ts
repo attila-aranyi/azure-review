@@ -39,6 +39,10 @@ function extractJsonFromText(text: string): unknown {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 export class AnthropicProvider implements LLMClient {
   private readonly apiKey: string;
   private readonly model: string;
@@ -92,11 +96,11 @@ export class AnthropicProvider implements LLMClient {
           throw err;
         }
 
-        const json = JSON.parse(text) as any;
-        const contentParts = Array.isArray(json?.content) ? json.content : [];
+        const json = JSON.parse(text) as unknown;
+        const contentParts = isRecord(json) && Array.isArray(json.content) ? json.content : [];
         const contentText = contentParts
-          .map((p: any) => (typeof p?.text === "string" ? p.text : ""))
-          .filter((s: string) => s.length > 0)
+          .map((p) => (isRecord(p) && typeof p.text === "string" ? p.text : ""))
+          .filter((s) => s.length > 0)
           .join("\n");
 
         if (contentText.length === 0) {
