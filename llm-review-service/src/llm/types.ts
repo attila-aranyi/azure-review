@@ -31,7 +31,7 @@ export type LLMCompleteJSONArgs<T> = {
   stage: LLMStage;
   system: string;
   prompt: string;
-  schema: ZodType<T>;
+  schema: ZodType<T, any, unknown>;
   timeoutMs: number;
 };
 
