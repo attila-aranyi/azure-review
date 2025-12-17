@@ -2,8 +2,12 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config";
 import { runReview } from "../review/runReview";
+import type { ReviewQueue } from "../review/queue";
 
-export const registerWebhookRoutes: FastifyPluginAsync<{ config: Config }> = async (app, opts) => {
+export const registerWebhookRoutes: FastifyPluginAsync<{ config: Config; queue: ReviewQueue }> = async (
+  app,
+  opts
+) => {
   app.post("/webhooks/azure-devops/pr", async (request, reply) => {
     const headerValue = request.headers["x-webhook-secret"];
     const secret = Array.isArray(headerValue) ? headerValue[0] : headerValue;
@@ -48,15 +52,21 @@ export const registerWebhookRoutes: FastifyPluginAsync<{ config: Config }> = asy
       return reply.code(400).send({ ok: false });
     }
 
-    const timeoutMs = 120_000;
-    setImmediate(() => {
-      void Promise.race([
-        runReview({ config: opts.config, repoId, prId }),
-        new Promise<void>((_, reject) => setTimeout(() => reject(new Error("review timeout")), timeoutMs))
-      ]).catch((err) => {
-        app.log.error({ err, repoId, prId }, "Review pipeline failed");
+    if (opts.queue.enabled) {
+      await opts.queue.enqueue({ repoId, prId });
+    } else {
+      const timeoutMs = 120_000;
+      setImmediate(() => {
+        void Promise.race([
+          runReview({ config: opts.config, repoId, prId }),
+          new Promise<void>((_, reject) =>
+            setTimeout(() => reject(new Error("review timeout")), timeoutMs)
+          )
+        ]).catch((err) => {
+          app.log.error({ err, repoId, prId }, "Review pipeline failed");
+        });
       });
-    });
+    }
 
     return reply.send({ ok: true });
   });

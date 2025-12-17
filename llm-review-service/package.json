@@ -11,9 +11,11 @@
   },
   "dependencies": {
     "@fastify/cors": "^8.5.0",
+    "bullmq": "^4.15.4",
     "diff": "^5.2.0",
     "dotenv": "^16.4.5",
     "fastify": "^4.28.1",
+    "ioredis": "^5.4.2",
     "pino": "^9.3.2",
     "undici": "^5.28.4",
     "zod": "^3.23.8"
