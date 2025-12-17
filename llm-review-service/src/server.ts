@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { loadConfig } from "./config";
 import { buildApp } from "./app";
 
@@ -12,4 +13,3 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
-
