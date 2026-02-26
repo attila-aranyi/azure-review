@@ -7,13 +7,19 @@ import { runPreprocessor } from "../llm/preprocessor";
 import { runReviewer } from "../llm/reviewer";
 import { createLogger } from "../logger";
 import { sha256Hex } from "../util/hash";
+import { withTiming } from "../util/timing";
 import { collectDiffHunks } from "./diffCollector";
 import { createFileIdempotencyStore, createInMemoryIdempotencyStore } from "./idempotency";
 import { limitsFromConfig } from "./limits";
 
-export async function runReview(_args: { config: Config; repoId: string; prId: number }): Promise<void> {
-  const { config, repoId, prId } = _args;
-  const logger = createLogger().child({ repoId, prId });
+export async function runReview(_args: {
+  config: Config;
+  repoId: string;
+  prId: number;
+  requestId?: string;
+}): Promise<void> {
+  const { config, repoId, prId, requestId } = _args;
+  const logger = createLogger().child({ repoId, prId, ...(requestId ? { requestId } : {}) });
   const ado = new AdoClient(config);
   const llm1 = createLLMClient(config, "llm1");
   const llm2 = createLLMClient(config, "llm2");
@@ -24,18 +30,24 @@ export async function runReview(_args: { config: Config; repoId: string; prId: n
 
   logger.info("Review start");
 
-  const pr = await ado.getPullRequest(repoId, prId);
-  const changedFilePaths = await ado.listPullRequestChanges(repoId, prId);
-  logger.info({ changedFiles: changedFilePaths.length }, "Fetched PR changes");
+  const { result: pr, ms: prMs } = await withTiming("fetchPR", () =>
+    ado.getPullRequest(repoId, prId)
+  );
+  const { result: changedFilePaths, ms: changesMs } = await withTiming("listChanges", () =>
+    ado.listPullRequestChanges(repoId, prId)
+  );
+  logger.info({ changedFiles: changedFilePaths.length, prMs, changesMs }, "Fetched PR changes");
 
-  const hunks = await collectDiffHunks({
-    ado,
-    repoId,
-    pr,
-    changedFilePaths,
-    limits: limitsFromConfig(config)
-  });
-  logger.info({ hunks: hunks.length }, "Collected diff hunks");
+  const { result: hunks, ms: diffMs } = await withTiming("collectDiffs", () =>
+    collectDiffHunks({
+      ado,
+      repoId,
+      pr,
+      changedFilePaths,
+      limits: limitsFromConfig(config)
+    })
+  );
+  logger.info({ hunks: hunks.length, diffMs }, "Collected diff hunks");
 
   const iteration = pr.lastMergeSourceCommit?.commitId;
   const codingStandardsText = [
@@ -45,17 +57,22 @@ export async function runReview(_args: { config: Config; repoId: string; prId: n
     "Avoid noisy style-only comments unless important."
   ].join("\n");
 
+  let totalFindings = 0;
+  let skippedFindings = 0;
+
   for (const hunk of hunks) {
-    const pre = await runPreprocessor({
-      client: llm1,
-      input: {
-        hunkText: hunk.hunkText,
-        localContext: hunk.localContext,
-        candidates: [],
-        tokenBudget: config.TOKEN_BUDGET_LLM1
-      },
-      timeoutMs: 60_000
-    });
+    const { result: pre, ms: llm1Ms } = await withTiming("llm1-preprocessor", () =>
+      runPreprocessor({
+        client: llm1,
+        input: {
+          hunkText: hunk.hunkText,
+          localContext: hunk.localContext,
+          candidates: [],
+          tokenBudget: config.TOKEN_BUDGET_LLM1
+        },
+        timeoutMs: 60_000
+      })
+    );
 
     const contextBundleText =
       pre.selected.length === 0
@@ -65,20 +82,28 @@ export async function runReview(_args: { config: Config; repoId: string; prId: n
             .join("\n\n")
             .trim();
 
-    const review = await runReviewer({
-      client: llm2,
-      input: {
-        filePath: hunk.filePath,
-        hunkStartLine: hunk.startLine,
-        hunkEndLine: hunk.endLine,
-        hunkText: hunk.hunkText,
-        contextBundleText,
-        codingStandardsText
-      },
-      timeoutMs: 90_000
-    });
+    const { result: review, ms: llm2Ms } = await withTiming("llm2-reviewer", () =>
+      runReviewer({
+        client: llm2,
+        input: {
+          filePath: hunk.filePath,
+          hunkStartLine: hunk.startLine,
+          hunkEndLine: hunk.endLine,
+          hunkText: hunk.hunkText,
+          contextBundleText,
+          codingStandardsText
+        },
+        timeoutMs: 90_000
+      })
+    );
+
+    logger.info(
+      { file: hunk.filePath, startLine: hunk.startLine, llm1Ms, llm2Ms, findings: review.findings.length },
+      "Hunk reviewed"
+    );
 
     for (const finding of review.findings) {
+      totalFindings++;
       const findingHash = sha256Hex(
         JSON.stringify({
           issueType: finding.issueType,
@@ -92,14 +117,19 @@ export async function runReview(_args: { config: Config; repoId: string; prId: n
       );
 
       const key = { repoId, prId, iteration, findingHash };
-      if (await idempotency.has(key)) continue;
+      if (await idempotency.has(key)) {
+        skippedFindings++;
+        continue;
+      }
 
-      const thread = findingToAdoThread(finding);
-      await ado.createPullRequestThread(repoId, prId, thread);
+      const { ms: postMs } = await withTiming("postThread", async () => {
+        const thread = findingToAdoThread(finding);
+        await ado.createPullRequestThread(repoId, prId, thread);
+      });
       await idempotency.put(key);
-      logger.info({ findingHash }, "Published finding");
+      logger.info({ findingHash, postMs }, "Published finding");
     }
   }
 
-  logger.info("Review done");
+  logger.info({ totalFindings, skippedFindings, published: totalFindings - skippedFindings }, "Review done");
 }

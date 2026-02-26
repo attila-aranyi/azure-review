@@ -7,11 +7,13 @@ import { runReview } from "./runReview";
 export type ReviewJobPayload = {
   repoId: string;
   prId: number;
+  requestId?: string;
 };
 
 export type ReviewQueue = {
   enabled: boolean;
   enqueue(payload: ReviewJobPayload): Promise<void>;
+  ping(): Promise<boolean>;
   close(): Promise<void>;
 };
 
@@ -20,6 +22,7 @@ export function createReviewQueue(config: Config): ReviewQueue {
     return {
       enabled: false,
       enqueue: async () => {},
+      ping: async () => true,
       close: async () => {}
     };
   }
@@ -31,7 +34,7 @@ export function createReviewQueue(config: Config): ReviewQueue {
   const worker = new Worker<ReviewJobPayload>(
     "llm-review",
     async (job) => {
-      await runReview({ config, repoId: job.data.repoId, prId: job.data.prId });
+      await runReview({ config, repoId: job.data.repoId, prId: job.data.prId, requestId: job.data.requestId });
     },
     { connection, concurrency: 1 }
   );
@@ -40,13 +43,25 @@ export function createReviewQueue(config: Config): ReviewQueue {
     logger.info({ jobId: job.id }, "Review job completed");
   });
   worker.on("failed", (job, err) => {
-    logger.error({ err, jobId: job?.id }, "Review job failed");
+    logger.error(
+      { err, jobId: job?.id, repoId: job?.data?.repoId, prId: job?.data?.prId, attemptsMade: job?.attemptsMade },
+      "Review job failed"
+    );
   });
 
   return {
     enabled: true,
     enqueue: async (payload) => {
-      await queue.add("review", payload, { removeOnComplete: true, removeOnFail: 100 });
+      await queue.add("review", payload, {
+        removeOnComplete: true,
+        removeOnFail: 100,
+        attempts: 3,
+        backoff: { type: "exponential", delay: 1000 }
+      });
+    },
+    ping: async () => {
+      const result = await connection.ping();
+      return result === "PONG";
     },
     close: async () => {
       await worker.close();

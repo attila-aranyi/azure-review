@@ -11,12 +11,28 @@ const optionalNonEmpty = () =>
     z.string().min(1).optional()
   );
 
-const providerEnum = z.enum(["mock", "openai", "azure_openai", "anthropic", "custom"]);
+const providerEnum = z.enum(["mock", "openai", "azure_openai", "anthropic"]);
+
+const commaSeparatedList = () =>
+  z.preprocess(
+    (value) => {
+      if (typeof value !== "string") return [];
+      return value
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+    },
+    z.array(z.string())
+  );
 
 const envSchema = z
   .object({
     PORT: z.coerce.number().int().positive().default(3000),
     WEBHOOK_SECRET: z.string().min(1),
+
+    CORS_ORIGINS: commaSeparatedList().default([]),
+    RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
+    RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
 
     ADO_ORG: z.string().min(1),
     ADO_PROJECT: z.string().min(1),

@@ -1,0 +1,10 @@
+node_modules
+dist
+.git
+.env
+.data
+test
+*.md
+.eslintrc.cjs
+vitest.config.ts
+tsconfig.json

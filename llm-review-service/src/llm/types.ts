@@ -1,4 +1,4 @@
-export type LLMProviderName = "mock" | "openai" | "azure_openai" | "anthropic" | "custom";
+export type LLMProviderName = "mock" | "openai" | "azure_openai" | "anthropic";
 
 export type LLMStage = "llm1" | "llm2";
 
@@ -65,8 +65,6 @@ export function createLLMClient(config: Config, stage: LLMStage): LLMClient {
       if (!apiKey || !model) throw new Error(`Missing Anthropic config for ${stage}`);
       return new AnthropicProvider({ apiKey, model });
     }
-    case "custom":
-      throw new Error("Custom LLM provider not implemented");
     default: {
       const _exhaustive: never = provider;
       throw new Error(`Unsupported LLM provider: ${_exhaustive}`);
