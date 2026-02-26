@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as undici from "undici";
 import { AdoClient, AdoClientError } from "../src/azure/adoClient";
 import type { Config } from "../src/config";
+import type { Logger } from "pino";
 
 vi.mock("undici", async () => {
   const actual = await vi.importActual<typeof undici>("undici");
@@ -195,7 +196,7 @@ describe("AdoClient", () => {
   describe("debug logging", () => {
     it("logs response status at debug level for requestJson", async () => {
       const debugFn = vi.fn();
-      const mockLogger = { debug: debugFn } as any;
+      const mockLogger = { debug: debugFn } as unknown as Logger;
       const logClient = new AdoClient(makeConfig(), mockLogger);
 
       mockRequest.mockResolvedValueOnce(mockResponse(200, { pullRequestId: 42 }));
@@ -209,7 +210,7 @@ describe("AdoClient", () => {
 
     it("logs response status at debug level for requestText", async () => {
       const debugFn = vi.fn();
-      const mockLogger = { debug: debugFn } as any;
+      const mockLogger = { debug: debugFn } as unknown as Logger;
       const logClient = new AdoClient(makeConfig(), mockLogger);
 
       mockRequest.mockResolvedValueOnce(mockResponse(200, "file contents"));

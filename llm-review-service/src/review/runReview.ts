@@ -3,12 +3,13 @@ import path from "node:path";
 import type { Config } from "../config";
 import { AdoClient } from "../azure/adoClient";
 import type { AdoPullRequest } from "../azure/adoTypes";
-import { findingToAdoThread } from "../azure/threadBuilder";
+import { findingToAdoThread, visualFindingToAdoThread } from "../azure/threadBuilder";
 import { createLLMClient } from "../llm/types";
 import type { Finding } from "../llm/types";
 import { runPreprocessor } from "../llm/preprocessor";
 import { runReviewer } from "../llm/reviewer";
 import { runAccessibilityCheck } from "../llm/accessibilityChecker";
+import { runVisualAccessibilityCheck } from "../llm/visualAccessibilityChecker";
 import { createLogger } from "../logger";
 import { sha256Hex } from "../util/hash";
 import { withTiming } from "../util/timing";
@@ -16,6 +17,7 @@ import { collectDiffHunks } from "./diffCollector";
 import type { DiffHunk } from "./hunkTypes";
 import { createFileIdempotencyStore, createInMemoryIdempotencyStore } from "./idempotency";
 import { limitsFromConfig } from "./limits";
+import { filterFindings } from "./severity";
 import type { AuditStore, AuditRecord, AuditFinding, AuditHunkResult } from "./audit";
 
 export async function runReview(_args: {
@@ -24,8 +26,9 @@ export async function runReview(_args: {
   prId: number;
   requestId?: string;
   auditStore?: AuditStore;
+  previewUrl?: string;
 }): Promise<void> {
-  const { config, repoId, prId, requestId } = _args;
+  const { config, repoId, prId, requestId, previewUrl } = _args;
   const logger = createLogger().child({ repoId, prId, ...(requestId ? { requestId } : {}) });
   const ado = new AdoClient(config, logger);
   const llm1 = createLLMClient(config, "llm1");
@@ -87,6 +90,9 @@ export async function runReview(_args: {
     auditTimings.collectDiffsMs = diffMs;
     logger.info({ hunks: hunks.length, diffMs }, "Collected diff hunks");
 
+    const minSeverity = config.REVIEW_MIN_SEVERITY ?? "low";
+    const strictness = config.REVIEW_STRICTNESS ?? "balanced";
+
     const iteration = pr.lastMergeSourceCommit?.commitId;
     const codingStandardsText = [
       "Be precise and actionable.",
@@ -131,6 +137,7 @@ export async function runReview(_args: {
             contextBundleText,
             codingStandardsText
           },
+          strictness,
           timeoutMs: 90_000
         })
       );
@@ -154,6 +161,7 @@ export async function runReview(_args: {
               hunkText: hunk.hunkText,
               localContext: hunk.localContext
             },
+            strictness,
             timeoutMs: 60_000
           })
         );
@@ -165,6 +173,8 @@ export async function runReview(_args: {
         llm3Result = { provider: llm3.providerName, model: llm3.modelName, ms: llm3Ms };
       }
 
+      const { passed: passedFindings, filtered: filteredByMinSev } = filterFindings(allFindings, minSeverity);
+
       auditHunkResults.push({
         filePath: hunk.filePath,
         startLine: hunk.startLine,
@@ -175,7 +185,33 @@ export async function runReview(_args: {
         findingsCount: allFindings.length,
       });
 
-      for (const finding of allFindings) {
+      for (const finding of filteredByMinSev) {
+        totalFindings++;
+        const findingHash = sha256Hex(
+          JSON.stringify({
+            issueType: finding.issueType,
+            severity: finding.severity,
+            filePath: finding.filePath,
+            startLine: finding.startLine,
+            endLine: finding.endLine,
+            message: finding.message,
+            suggestion: finding.suggestion ?? ""
+          })
+        );
+        auditFindings.push({
+          issueType: finding.issueType,
+          severity: finding.severity,
+          filePath: finding.filePath,
+          startLine: finding.startLine,
+          endLine: finding.endLine,
+          message: finding.message,
+          suggestion: finding.suggestion,
+          findingHash,
+          status: "filtered",
+        });
+      }
+
+      for (const finding of passedFindings) {
         totalFindings++;
         const findingHash = sha256Hex(
           JSON.stringify({
@@ -241,7 +277,57 @@ export async function runReview(_args: {
       }
     }
 
-    logger.info({ totalFindings, skippedFindings, published: totalFindings - skippedFindings }, "Review done");
+    const filteredCount = auditFindings.filter((f) => f.status === "filtered").length;
+    logger.info({ totalFindings, skippedFindings, filteredCount, published: totalFindings - skippedFindings - filteredCount }, "Review done");
+
+    // ── LLM4: Visual Accessibility ──
+    const llm4Enabled = config.LLM4_ENABLED === true && !!config.LLM4_PROVIDER;
+    if (llm4Enabled && previewUrl) {
+      const llm4 = createLLMClient(config, "llm4");
+      logger.info({ previewUrl }, "Starting visual accessibility check");
+
+      const { result: visualResult, ms: llm4Ms } = await withTiming(
+        "llm4-visual-a11y",
+        () => runVisualAccessibilityCheck({
+          client: llm4,
+          config,
+          previewUrl,
+          changedFiles: changedFilePaths,
+          logger,
+        })
+      );
+
+      const { findings: visualFindings, screenshots } = visualResult;
+
+      logger.info({
+        screenshots: screenshots.length,
+        visualFindings: visualFindings.length,
+        llm4Ms,
+      }, "Visual accessibility check done");
+
+      for (const finding of visualFindings) {
+        totalFindings++;
+        const findingHash = sha256Hex(JSON.stringify({
+          issueType: finding.issueType,
+          severity: finding.severity,
+          message: finding.message,
+          pageUrl: finding.pageUrl ?? "",
+        }));
+
+        const key = { repoId, prId, iteration, findingHash };
+        if (await idempotency.has(key)) {
+          skippedFindings++;
+          continue;
+        }
+
+        const thread = visualFindingToAdoThread(finding);
+        const { ms: postMs } = await withTiming("postVisualThread", () =>
+          ado.createPullRequestThread(repoId, prId, thread)
+        );
+        await idempotency.put(key);
+        logger.info({ findingHash, postMs }, "Published visual a11y finding");
+      }
+    }
   } catch (err) {
     reviewStatus = "failure";
     reviewError = err instanceof Error ? err.message : String(err);

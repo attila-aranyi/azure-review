@@ -1,6 +1,6 @@
 import { z } from "zod";
-import type { LLMClient, Finding } from "./types";
-import { accessibilitySystemPrompt, buildAccessibilityPrompt } from "./prompts/accessibilityPrompt";
+import type { LLMClient, Finding, ReviewStrictness } from "./types";
+import { getAccessibilitySystemPrompt, buildAccessibilityPrompt } from "./prompts/accessibilityPrompt";
 
 export type AccessibilityCheckerInput = {
   filePath: string;
@@ -63,13 +63,14 @@ function normalizeFinding(input: AccessibilityCheckerInput, finding: Finding): F
 export async function runAccessibilityCheck(args: {
   client: LLMClient;
   input: AccessibilityCheckerInput;
+  strictness?: ReviewStrictness;
   timeoutMs: number;
 }): Promise<AccessibilityCheckerOutput> {
   const prompt = buildAccessibilityPrompt(args.input);
 
   const output = await args.client.completeJSON({
     stage: "llm3",
-    system: accessibilitySystemPrompt,
+    system: getAccessibilitySystemPrompt(args.strictness ?? "balanced"),
     prompt,
     schema: accessibilityOutputSchema,
     timeoutMs: args.timeoutMs

@@ -3,4 +3,5 @@ dist/
 .env
 .env.azure
 .data/
+coverage/
 

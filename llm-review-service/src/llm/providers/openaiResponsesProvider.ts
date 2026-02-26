@@ -1,6 +1,6 @@
 import { request } from "undici";
 import type { Dispatcher } from "undici";
-import type { LLMClient, LLMCompleteJSONArgs } from "../types";
+import type { LLMClient, LLMCompleteJSONArgs, LLMCompleteVisionJSONArgs } from "../types";
 
 type OpenAIResponsesProviderOptions = {
   apiKey: string;
@@ -66,6 +66,7 @@ function extractOutputText(json: unknown): string {
 
 export class OpenAIResponsesProvider implements LLMClient {
   readonly providerName = "openai";
+  readonly supportsVision = true;
   private readonly apiKey: string;
   private readonly opts: OpenAIResponsesProviderOptions;
 
@@ -77,8 +78,6 @@ export class OpenAIResponsesProvider implements LLMClient {
   }
 
   async completeJSON<T>(args: LLMCompleteJSONArgs<T>): Promise<T> {
-    const url = "https://api.openai.com/v1/responses";
-
     const body = {
       model: this.opts.model,
       input: [
@@ -89,11 +88,43 @@ export class OpenAIResponsesProvider implements LLMClient {
       response_format: { type: "json_object" }
     };
 
+    return this.callAPI({ body, timeoutMs: args.timeoutMs, schema: args.schema });
+  }
+
+  async completeVisionJSON<T>(args: LLMCompleteVisionJSONArgs<T>): Promise<T> {
+    const userContent: unknown[] = [
+      ...args.images.map(img => ({
+        type: "input_image",
+        image_url: `data:${img.mediaType};base64,${img.base64Data}`
+      })),
+      { type: "input_text", text: args.prompt }
+    ];
+
+    const body = {
+      model: this.opts.model,
+      input: [
+        { role: "system", content: args.system },
+        { role: "user", content: userContent }
+      ],
+      temperature: 0,
+      response_format: { type: "json_object" }
+    };
+
+    return this.callAPI({ body, timeoutMs: args.timeoutMs, schema: args.schema });
+  }
+
+  private async callAPI<T>(opts: {
+    body: unknown;
+    timeoutMs: number;
+    schema: import("zod").ZodType<T, import("zod").ZodTypeDef, unknown>;
+  }): Promise<T> {
+    const url = "https://api.openai.com/v1/responses";
     const maxAttempts = 4;
     let lastErr: unknown;
+
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), args.timeoutMs);
+      const timeout = setTimeout(() => controller.abort(), opts.timeoutMs);
       try {
         const res = await request(url, {
           method: "POST" as Dispatcher.HttpMethod,
@@ -103,7 +134,7 @@ export class OpenAIResponsesProvider implements LLMClient {
             "Content-Type": "application/json",
             Accept: "application/json"
           },
-          body: JSON.stringify(body)
+          body: JSON.stringify(opts.body)
         });
 
         const text = await res.body.text();
@@ -123,7 +154,7 @@ export class OpenAIResponsesProvider implements LLMClient {
         const json = JSON.parse(text) as unknown;
         const outputText = extractOutputText(json);
         const parsed = extractJsonFromText(outputText);
-        return args.schema.parse(parsed);
+        return opts.schema.parse(parsed);
       } catch (err) {
         lastErr = err;
         const retryable = err instanceof OpenAIProviderError ? isRetryableStatus(err.details.statusCode ?? 0) : false;

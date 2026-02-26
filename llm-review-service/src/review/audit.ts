@@ -10,7 +10,7 @@ export type AuditFinding = {
   message: string;
   suggestion?: string;
   findingHash: string;
-  status: "posted" | "skipped_duplicate";
+  status: "posted" | "skipped_duplicate" | "filtered";
   postMs?: number;
 };
 

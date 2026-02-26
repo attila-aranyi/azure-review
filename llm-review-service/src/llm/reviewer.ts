@@ -1,6 +1,6 @@
 import { z } from "zod";
-import type { LLMClient, Finding } from "./types";
-import { reviewerSystemPrompt, buildReviewerPrompt } from "./prompts/reviewerPrompt";
+import type { LLMClient, Finding, ReviewStrictness } from "./types";
+import { getReviewerSystemPrompt, buildReviewerPrompt } from "./prompts/reviewerPrompt";
 
 export type ReviewerInput = {
   filePath: string;
@@ -63,13 +63,14 @@ function normalizeFinding(input: ReviewerInput, finding: Finding): Finding {
 export async function runReviewer(args: {
   client: LLMClient;
   input: ReviewerInput;
+  strictness?: ReviewStrictness;
   timeoutMs: number;
 }): Promise<ReviewerOutput> {
   const prompt = buildReviewerPrompt(args.input);
 
   const output = await args.client.completeJSON({
     stage: "llm2",
-    system: reviewerSystemPrompt,
+    system: getReviewerSystemPrompt(args.strictness ?? "balanced"),
     prompt,
     schema: reviewerOutputSchema,
     timeoutMs: args.timeoutMs

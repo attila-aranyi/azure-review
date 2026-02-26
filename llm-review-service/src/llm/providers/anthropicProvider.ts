@@ -1,6 +1,6 @@
 import { request } from "undici";
 import type { Dispatcher } from "undici";
-import type { LLMClient, LLMCompleteJSONArgs } from "../types";
+import type { LLMClient, LLMCompleteJSONArgs, LLMCompleteVisionJSONArgs } from "../types";
 
 type AnthropicProviderOptions = {
   apiKey: string;
@@ -45,6 +45,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export class AnthropicProvider implements LLMClient {
   readonly providerName = "anthropic";
+  readonly supportsVision = true;
   private readonly apiKey: string;
   private readonly opts: AnthropicProviderOptions;
 
@@ -56,21 +57,61 @@ export class AnthropicProvider implements LLMClient {
   }
 
   async completeJSON<T>(args: LLMCompleteJSONArgs<T>): Promise<T> {
+    return this.callAPI({
+      system: args.system,
+      messages: [{ role: "user", content: args.prompt }],
+      maxTokens: 2048,
+      timeoutMs: args.timeoutMs,
+      schema: args.schema,
+    });
+  }
+
+  async completeVisionJSON<T>(args: LLMCompleteVisionJSONArgs<T>): Promise<T> {
+    const contentBlocks: unknown[] = [
+      ...args.images.map(img => ({
+        type: "image",
+        source: { type: "base64", media_type: img.mediaType, data: img.base64Data }
+      })),
+      { type: "text", text: args.prompt }
+    ];
+
+    return this.callAPI({
+      system: args.system,
+      messages: [{ role: "user", content: contentBlocks }],
+      maxTokens: args.maxTokens ?? 4096,
+      timeoutMs: args.timeoutMs,
+      schema: args.schema,
+    });
+  }
+
+  private async callAPI<T>(opts: {
+    system: string;
+    messages: unknown[];
+    maxTokens: number;
+    timeoutMs: number;
+    schema: import("zod").ZodType<T, import("zod").ZodTypeDef, unknown>;
+  }): Promise<T> {
     const url = "https://api.anthropic.com/v1/messages";
     const maxAttempts = 4;
     let lastErr: unknown;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), args.timeoutMs);
+      const timeout = setTimeout(() => controller.abort(), opts.timeoutMs);
       try {
-        const prompt = attempt === 1 ? args.prompt : `${args.prompt}\n\nReturn ONLY valid JSON.`;
         const body = {
           model: this.opts.model,
           temperature: 0,
-          max_tokens: 2048,
-          system: args.system,
-          messages: [{ role: "user", content: prompt }]
+          max_tokens: opts.maxTokens,
+          system: opts.system,
+          messages: attempt === 1
+            ? opts.messages
+            : opts.messages.map((msg) => {
+                if (isRecord(msg) && typeof msg.content === "string") {
+                  return { ...msg, content: `${msg.content}\n\nReturn ONLY valid JSON.` };
+                }
+                return msg;
+              })
         };
 
         const res = await request(url, {
@@ -111,7 +152,7 @@ export class AnthropicProvider implements LLMClient {
         }
 
         const parsed = extractJsonFromText(contentText);
-        return args.schema.parse(parsed);
+        return opts.schema.parse(parsed);
       } catch (err) {
         lastErr = err;
         const retryable =
@@ -121,7 +162,6 @@ export class AnthropicProvider implements LLMClient {
           continue;
         }
         if (attempt < maxAttempts && !(err instanceof AnthropicProviderError)) {
-          // Allow one retry on invalid JSON / schema errors by continuing.
           continue;
         }
         throw err;
