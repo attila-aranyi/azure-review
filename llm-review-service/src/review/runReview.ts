@@ -3,8 +3,10 @@ import type { Config } from "../config";
 import { AdoClient } from "../azure/adoClient";
 import { findingToAdoThread } from "../azure/threadBuilder";
 import { createLLMClient } from "../llm/types";
+import type { Finding } from "../llm/types";
 import { runPreprocessor } from "../llm/preprocessor";
 import { runReviewer } from "../llm/reviewer";
+import { runAccessibilityCheck } from "../llm/accessibilityChecker";
 import { createLogger } from "../logger";
 import { sha256Hex } from "../util/hash";
 import { withTiming } from "../util/timing";
@@ -23,6 +25,10 @@ export async function runReview(_args: {
   const ado = new AdoClient(config);
   const llm1 = createLLMClient(config, "llm1");
   const llm2 = createLLMClient(config, "llm2");
+
+  const llm3Enabled = config.LLM3_ENABLED === true && !!config.LLM3_PROVIDER;
+  const llm3 = llm3Enabled ? createLLMClient(config, "llm3") : null;
+  const a11yExtensions: string[] = config.A11Y_FILE_EXTENSIONS ?? [".html", ".jsx", ".tsx", ".vue", ".svelte", ".css", ".scss"];
 
   const idempotency = await createFileIdempotencyStore({
     dataDir: path.join(process.cwd(), ".data")
@@ -102,7 +108,30 @@ export async function runReview(_args: {
       "Hunk reviewed"
     );
 
-    for (const finding of review.findings) {
+    const allFindings: Finding[] = [...review.findings];
+
+    if (llm3 && a11yExtensions.some((ext) => hunk.filePath.endsWith(ext))) {
+      const { result: a11y, ms: llm3Ms } = await withTiming("llm3-accessibility", () =>
+        runAccessibilityCheck({
+          client: llm3,
+          input: {
+            filePath: hunk.filePath,
+            hunkStartLine: hunk.startLine,
+            hunkEndLine: hunk.endLine,
+            hunkText: hunk.hunkText,
+            localContext: hunk.localContext
+          },
+          timeoutMs: 60_000
+        })
+      );
+      logger.info(
+        { file: hunk.filePath, startLine: hunk.startLine, llm3Ms, a11yFindings: a11y.findings.length },
+        "Accessibility check done"
+      );
+      allFindings.push(...a11y.findings);
+    }
+
+    for (const finding of allFindings) {
       totalFindings++;
       const findingHash = sha256Hex(
         JSON.stringify({

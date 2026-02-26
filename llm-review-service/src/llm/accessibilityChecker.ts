@@ -1,17 +1,16 @@
 import { z } from "zod";
 import type { LLMClient, Finding } from "./types";
-import { reviewerSystemPrompt, buildReviewerPrompt } from "./prompts/reviewerPrompt";
+import { accessibilitySystemPrompt, buildAccessibilityPrompt } from "./prompts/accessibilityPrompt";
 
-export type ReviewerInput = {
+export type AccessibilityCheckerInput = {
   filePath: string;
   hunkStartLine: number;
   hunkEndLine: number;
   hunkText: string;
-  contextBundleText: string;
-  codingStandardsText: string;
+  localContext: string;
 };
 
-export const reviewerOutputSchema = z.object({
+export const accessibilityOutputSchema = z.object({
   findings: z
     .array(
       z.object({
@@ -37,13 +36,13 @@ export const reviewerOutputSchema = z.object({
     .optional()
 }).transform((value) => ({ findings: value.findings ?? [] }));
 
-export type ReviewerOutput = z.infer<typeof reviewerOutputSchema>;
+export type AccessibilityCheckerOutput = z.infer<typeof accessibilityOutputSchema>;
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
-function normalizeFinding(input: ReviewerInput, finding: Finding): Finding {
+function normalizeFinding(input: AccessibilityCheckerInput, finding: Finding): Finding {
   const hunkStart = Math.min(input.hunkStartLine, input.hunkEndLine);
   const hunkEnd = Math.max(input.hunkStartLine, input.hunkEndLine);
 
@@ -54,24 +53,25 @@ function normalizeFinding(input: ReviewerInput, finding: Finding): Finding {
 
   return {
     ...finding,
+    issueType: "accessibility",
     filePath: input.filePath,
     startLine: normalizedStart,
     endLine: normalizedEnd
   };
 }
 
-export async function runReviewer(args: {
+export async function runAccessibilityCheck(args: {
   client: LLMClient;
-  input: ReviewerInput;
+  input: AccessibilityCheckerInput;
   timeoutMs: number;
-}): Promise<ReviewerOutput> {
-  const prompt = buildReviewerPrompt(args.input);
+}): Promise<AccessibilityCheckerOutput> {
+  const prompt = buildAccessibilityPrompt(args.input);
 
   const output = await args.client.completeJSON({
-    stage: "llm2",
-    system: reviewerSystemPrompt,
+    stage: "llm3",
+    system: accessibilitySystemPrompt,
     prompt,
-    schema: reviewerOutputSchema,
+    schema: accessibilityOutputSchema,
     timeoutMs: args.timeoutMs
   });
 

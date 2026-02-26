@@ -35,6 +35,52 @@ export class MockLLMProvider implements LLMClient {
       return args.schema.parse(output);
     }
 
+    if (args.stage === "llm3") {
+      const filePath = extractLineValue(args.prompt, "FILE_PATH") ?? "unknown";
+      const startLine = Number(extractLineValue(args.prompt, "HUNK_START_LINE") ?? "1");
+      const endLine = Number(extractLineValue(args.prompt, "HUNK_END_LINE") ?? String(startLine));
+
+      const a11yFindings: Array<{
+        issueType: string; severity: string; filePath: string;
+        startLine: number; endLine: number; message: string; suggestion: string;
+      }> = [];
+
+      if (/<img\b(?![^>]*\balt\s*=)/i.test(args.prompt)) {
+        a11yFindings.push({
+          issueType: "accessibility", severity: "high", filePath, startLine, endLine,
+          message: "Image element is missing an alt attribute.",
+          suggestion: "Add a descriptive alt attribute, or alt=\"\" for decorative images."
+        });
+      }
+
+      if (/<div\b/i.test(args.prompt) && !/<(nav|main|header|footer|section|article|aside)\b/i.test(args.prompt)) {
+        a11yFindings.push({
+          issueType: "accessibility", severity: "medium", filePath, startLine, endLine,
+          message: "Non-semantic <div> used where a semantic element may be more appropriate.",
+          suggestion: "Consider using <nav>, <main>, <header>, <footer>, <section>, or <article> instead."
+        });
+      }
+
+      if (/onClick/i.test(args.prompt) && !/onKey(Down|Press|Up)/i.test(args.prompt)) {
+        a11yFindings.push({
+          issueType: "accessibility", severity: "high", filePath, startLine, endLine,
+          message: "onClick handler without corresponding keyboard event handler.",
+          suggestion: "Add onKeyDown or onKeyPress to ensure keyboard accessibility."
+        });
+      }
+
+      if (/<(input|textarea|select)\b/i.test(args.prompt) &&
+          !/aria-label/i.test(args.prompt) && !/\bfor\s*=/i.test(args.prompt) && !/htmlFor/i.test(args.prompt)) {
+        a11yFindings.push({
+          issueType: "accessibility", severity: "high", filePath, startLine, endLine,
+          message: "Form element missing an associated label.",
+          suggestion: "Add a <label> with for/htmlFor or an aria-label attribute."
+        });
+      }
+
+      return args.schema.parse({ findings: a11yFindings });
+    }
+
     const suspiciousKeywords = ["TODO", "FIXME", "eval(", ": any", " as any", "any)", "password", "secret"];
     const hasSuspicious = suspiciousKeywords.some((kw) => args.prompt.includes(kw));
     const filePath = extractLineValue(args.prompt, "FILE_PATH") ?? "unknown";

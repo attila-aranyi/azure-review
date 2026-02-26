@@ -2,12 +2,14 @@ import { describe, it, expect } from "vitest";
 import { z } from "zod";
 import { preprocessorOutputSchema } from "../src/llm/preprocessor";
 import { reviewerOutputSchema } from "../src/llm/reviewer";
+import { accessibilityOutputSchema } from "../src/llm/accessibilityChecker";
 import { MockLLMProvider } from "../src/llm/providers/mockProvider";
 
 describe("llm schemas", () => {
   it("parses defaults for missing arrays", () => {
     expect(preprocessorOutputSchema.parse({})).toEqual({ selected: [] });
     expect(reviewerOutputSchema.parse({})).toEqual({ findings: [] });
+    expect(accessibilityOutputSchema.parse({})).toEqual({ findings: [] });
   });
 
   it("rejects invalid reviewer output", () => {

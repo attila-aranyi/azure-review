@@ -145,6 +145,81 @@ describe("E2E review pipeline", () => {
     expect(thread.comments?.[0]?.content).toContain("Severity");
   });
 
+  it("LLM3 accessibility findings are posted for HTML files", async () => {
+    await app.close();
+
+    const a11yConfig = {
+      ...makeConfig(),
+      LLM3_ENABLED: true,
+      LLM3_PROVIDER: "mock" as const,
+      TOKEN_BUDGET_LLM3: 4000,
+      A11Y_FILE_EXTENSIONS: [".html", ".jsx", ".tsx"]
+    } as Config;
+
+    const htmlBefore = "<div>Hello</div>";
+    const htmlAfter = '<div><img src="photo.jpg"></div>';
+
+    threadPostCalls = [];
+    mockRequest.mockReset();
+    mockRequest.mockImplementation(async (url: string | URL, opts?: unknown) => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      const method = (opts as { method?: string })?.method ?? "GET";
+
+      if (urlStr.includes("/pullRequests/43") && !urlStr.includes("/changes") && !urlStr.includes("/threads")) {
+        return mockResponse(200, {
+          pullRequestId: 43,
+          lastMergeSourceCommit: { commitId: "src-a11y" },
+          lastMergeTargetCommit: { commitId: "tgt-a11y" }
+        });
+      }
+      if (urlStr.includes("/pullRequests/43/changes")) {
+        return mockResponse(200, {
+          changes: [{ item: { path: "/src/page.html" } }]
+        });
+      }
+      if (urlStr.includes("/items") && urlStr.includes("tgt-a11y")) {
+        return mockResponse(200, htmlBefore);
+      }
+      if (urlStr.includes("/items") && urlStr.includes("src-a11y")) {
+        return mockResponse(200, htmlAfter);
+      }
+      if (urlStr.includes("/threads") && method === "POST") {
+        const body = (opts as { body?: string })?.body;
+        threadPostCalls.push(body ? JSON.parse(body) : null);
+        return mockResponse(200, { id: threadPostCalls.length });
+      }
+      return mockResponse(404, "Not found");
+    });
+
+    app = await buildApp({ config: a11yConfig });
+    await app.ready();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/webhooks/azure-devops/pr",
+      headers: { "x-webhook-secret": "e2e-secret" },
+      payload: {
+        resource: {
+          pullRequestId: 43,
+          repository: { id: "repo-a11y" }
+        }
+      }
+    });
+
+    expect(res.statusCode).toBe(200);
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // Should have at least one accessibility finding (missing alt on img)
+    expect(threadPostCalls.length).toBeGreaterThan(0);
+    const hasA11yFinding = threadPostCalls.some((call) => {
+      const thread = call as { comments?: Array<{ content?: string }> };
+      return thread.comments?.[0]?.content?.includes("accessibility") ||
+             thread.comments?.[0]?.content?.includes("alt");
+    });
+    expect(hasA11yFinding).toBe(true);
+  });
+
   it("health endpoints work alongside webhook routes", async () => {
     const healthRes = await app.inject({ method: "GET", url: "/health" });
     expect(healthRes.statusCode).toBe(200);

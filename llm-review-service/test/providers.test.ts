@@ -93,6 +93,104 @@ describe("MockLLMProvider", () => {
     });
     expect(result.findings).toHaveLength(0);
   });
+
+  it("detects missing alt attribute for llm3 stage", async () => {
+    const provider = new MockLLMProvider();
+    const schema = z.object({
+      findings: z.array(
+        z.object({
+          issueType: z.string(),
+          severity: z.string(),
+          filePath: z.string(),
+          startLine: z.number(),
+          endLine: z.number(),
+          message: z.string(),
+          suggestion: z.string().optional()
+        })
+      ).default([])
+    });
+
+    const result = await provider.completeJSON({
+      stage: "llm3",
+      system: "",
+      prompt: 'FILE_PATH: /app.tsx\nHUNK_START_LINE: 1\nHUNK_END_LINE: 10\n<img src="photo.jpg">',
+      schema,
+      timeoutMs: 5000
+    });
+    expect(result.findings.length).toBeGreaterThan(0);
+    expect(result.findings[0].issueType).toBe("accessibility");
+    expect(result.findings[0].message).toContain("alt");
+  });
+
+  it("detects onClick without keyboard handler for llm3 stage", async () => {
+    const provider = new MockLLMProvider();
+    const schema = z.object({
+      findings: z.array(
+        z.object({
+          issueType: z.string(),
+          severity: z.string(),
+          filePath: z.string(),
+          startLine: z.number(),
+          endLine: z.number(),
+          message: z.string(),
+          suggestion: z.string().optional()
+        })
+      ).default([])
+    });
+
+    const result = await provider.completeJSON({
+      stage: "llm3",
+      system: "",
+      prompt: "FILE_PATH: /btn.tsx\nHUNK_START_LINE: 5\nHUNK_END_LINE: 15\n<div onClick={handleClick}>Click</div>",
+      schema,
+      timeoutMs: 5000
+    });
+    const keyboardFinding = result.findings.find((f) => f.message.includes("keyboard"));
+    expect(keyboardFinding).toBeDefined();
+  });
+
+  it("detects non-semantic divs for llm3 stage", async () => {
+    const provider = new MockLLMProvider();
+    const schema = z.object({
+      findings: z.array(
+        z.object({
+          issueType: z.string(),
+          severity: z.string(),
+          filePath: z.string(),
+          startLine: z.number(),
+          endLine: z.number(),
+          message: z.string(),
+          suggestion: z.string().optional()
+        })
+      ).default([])
+    });
+
+    const result = await provider.completeJSON({
+      stage: "llm3",
+      system: "",
+      prompt: "FILE_PATH: /page.html\nHUNK_START_LINE: 1\nHUNK_END_LINE: 5\n<div class=\"header\">Title</div>",
+      schema,
+      timeoutMs: 5000
+    });
+    const semanticFinding = result.findings.find((f) => f.message.includes("semantic"));
+    expect(semanticFinding).toBeDefined();
+  });
+
+  it("returns no findings for accessible code in llm3 stage", async () => {
+    const provider = new MockLLMProvider();
+    const schema = z.object({
+      findings: z.array(z.object({ message: z.string() })).default([])
+    });
+
+    const result = await provider.completeJSON({
+      stage: "llm3",
+      system: "",
+      prompt: "FILE_PATH: /page.html\nHUNK_START_LINE: 1\nHUNK_END_LINE: 5\n<nav><a href=\"/\">Home</a></nav>",
+      schema,
+      timeoutMs: 5000
+    });
+    expect(result.findings).toHaveLength(0);
+  });
 });
 
 describe("AnthropicProvider", () => {
