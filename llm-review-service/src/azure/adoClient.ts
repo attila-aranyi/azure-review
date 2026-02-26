@@ -1,14 +1,17 @@
 import { Buffer } from "node:buffer";
 import { request } from "undici";
 import type { Dispatcher } from "undici";
+import type { Logger } from "pino";
 import type { Config } from "../config";
-import type { AdoCreateThreadRequest, AdoListPullRequestChangesResponse, AdoPullRequest } from "./adoTypes";
+import type { AdoCreateThreadRequest, AdoIterationsResponse, AdoListPullRequestChangesResponse, AdoPullRequest } from "./adoTypes";
 
 export type AdoVersionDescriptor = {
   version: string;
   versionType: "commit" | "branch";
   versionOptions?: "none" | "previousChange" | "firstParent";
 };
+
+const ADO_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class AdoClientError extends Error {
   readonly name = "AdoClientError";
@@ -23,10 +26,18 @@ export class AdoClientError extends Error {
 export class AdoClient {
   private readonly baseUrl: string;
   private readonly authHeader: string;
+  private readonly logger?: Logger;
 
-  constructor(private readonly config: Config) {
+  constructor(private readonly config: Config, logger?: Logger) {
     this.baseUrl = `https://dev.azure.com/${this.config.ADO_ORG}/${this.config.ADO_PROJECT}/_apis/git`;
     this.authHeader = `Basic ${Buffer.from(`:${this.config.ADO_PAT}`).toString("base64")}`;
+    this.logger = logger;
+  }
+
+  private assertValidRepoId(repoId: string): void {
+    if (!ADO_GUID_RE.test(repoId)) {
+      throw new AdoClientError("Invalid repository ID format", { url: repoId });
+    }
   }
 
   private async requestJson<T>(
@@ -45,6 +56,7 @@ export class AdoClient {
     });
 
     const text = await res.body.text();
+    this.logger?.debug({ method, statusCode: res.statusCode }, "ADO API response");
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw new AdoClientError(`Azure DevOps API request failed: ${res.statusCode}`, {
         statusCode: res.statusCode,
@@ -69,6 +81,7 @@ export class AdoClient {
       }
     });
     const text = await res.body.text();
+    this.logger?.debug({ method, statusCode: res.statusCode }, "ADO API response");
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw new AdoClientError(`Azure DevOps API request failed: ${res.statusCode}`, {
         statusCode: res.statusCode,
@@ -88,41 +101,58 @@ export class AdoClient {
     return url.toString();
   }
 
-  async getPullRequest(_repoId: string, _prId: number): Promise<AdoPullRequest> {
-    const url = this.buildUrl(`/repositories/${_repoId}/pullRequests/${_prId}`);
+  async getPullRequest(repoId: string, prId: number): Promise<AdoPullRequest> {
+    this.assertValidRepoId(repoId);
+    const url = this.buildUrl(`/repositories/${repoId}/pullRequests/${prId}`);
     return this.requestJson<AdoPullRequest>("GET", url);
   }
 
-  async listPullRequestChanges(_repoId: string, _prId: number): Promise<string[]> {
-    const url = this.buildUrl(`/repositories/${_repoId}/pullRequests/${_prId}/changes`);
+  async listPullRequestChanges(repoId: string, prId: number): Promise<string[]> {
+    this.assertValidRepoId(repoId);
+    const itersUrl = this.buildUrl(`/repositories/${repoId}/pullRequests/${prId}/iterations`);
+    const iters = await this.requestJson<AdoIterationsResponse>("GET", itersUrl);
+
+    const iterations = iters.value ?? [];
+    if (iterations.length === 0) {
+      throw new AdoClientError("No iterations found for pull request", { url: itersUrl });
+    }
+    const lastId = iterations.at(-1)!.id;
+    if (!Number.isInteger(lastId) || lastId < 1) {
+      throw new AdoClientError("Invalid iteration ID", { url: itersUrl });
+    }
+
+    const url = this.buildUrl(`/repositories/${repoId}/pullRequests/${prId}/iterations/${lastId}/changes`);
     const json = await this.requestJson<AdoListPullRequestChangesResponse>("GET", url);
-    const paths = (json.changes ?? [])
-      .map((c) => c.item?.path)
+    const paths = (json.changeEntries ?? [])
+      // originalPath is the pre-rename path used as fallback for file moves/renames
+      .map((c) => c.item?.path ?? c.originalPath)
       .filter((p): p is string => typeof p === "string" && p.length > 0);
     return Array.from(new Set(paths));
   }
 
   async getItemContent(
-    _repoId: string,
-    _path: string,
-    _versionDescriptor: AdoVersionDescriptor
+    repoId: string,
+    filePath: string,
+    versionDescriptor: AdoVersionDescriptor
   ): Promise<string> {
+    this.assertValidRepoId(repoId);
     const query: Record<string, string> = {
-      path: _path,
+      path: filePath,
       download: "true",
-      "versionDescriptor.version": _versionDescriptor.version,
-      "versionDescriptor.versionType": _versionDescriptor.versionType
+      "versionDescriptor.version": versionDescriptor.version,
+      "versionDescriptor.versionType": versionDescriptor.versionType
     };
-    if (_versionDescriptor.versionOptions) {
-      query["versionDescriptor.versionOptions"] = _versionDescriptor.versionOptions;
+    if (versionDescriptor.versionOptions) {
+      query["versionDescriptor.versionOptions"] = versionDescriptor.versionOptions;
     }
 
-    const url = this.buildUrl(`/repositories/${_repoId}/items`, query);
+    const url = this.buildUrl(`/repositories/${repoId}/items`, query);
     return this.requestText("GET", url);
   }
 
-  async createPullRequestThread(_repoId: string, _prId: number, _thread: AdoCreateThreadRequest): Promise<void> {
-    const url = this.buildUrl(`/repositories/${_repoId}/pullRequests/${_prId}/threads`);
-    await this.requestJson("POST", url, _thread);
+  async createPullRequestThread(repoId: string, prId: number, thread: AdoCreateThreadRequest): Promise<void> {
+    this.assertValidRepoId(repoId);
+    const url = this.buildUrl(`/repositories/${repoId}/pullRequests/${prId}/threads`);
+    await this.requestJson("POST", url, thread);
   }
 }

@@ -13,6 +13,8 @@ vi.mock("undici", async () => {
 
 const mockRequest = vi.mocked(undici.request);
 
+const VALID_REPO_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+
 function makeConfig(): Config {
   return {
     PORT: 3000,
@@ -54,30 +56,64 @@ describe("AdoClient", () => {
     vi.restoreAllMocks();
   });
 
+  describe("GUID validation", () => {
+    it("throws AdoClientError on invalid repoId", async () => {
+      await expect(client.getPullRequest("not-a-guid", 42)).rejects.toThrow(AdoClientError);
+      await expect(client.listPullRequestChanges("not-a-guid", 42)).rejects.toThrow(AdoClientError);
+      await expect(
+        client.getItemContent("not-a-guid", "/src/app.ts", { version: "abc", versionType: "commit" })
+      ).rejects.toThrow(AdoClientError);
+      await expect(
+        client.createPullRequestThread("not-a-guid", 42, {
+          status: 1,
+          comments: [{ parentCommentId: 0, commentType: 1, content: "test" }],
+          threadContext: {
+            filePath: "/src/app.ts",
+            rightFileStart: { line: 1, offset: 1 },
+            rightFileEnd: { line: 5, offset: 1 }
+          }
+        })
+      ).rejects.toThrow(AdoClientError);
+    });
+
+    it("accepts valid GUID repoId", async () => {
+      const prData = { pullRequestId: 42, sourceRefName: "refs/heads/feature" };
+      mockRequest.mockResolvedValueOnce(mockResponse(200, prData));
+
+      const result = await client.getPullRequest(VALID_REPO_ID, 42);
+      expect(result).toEqual(prData);
+    });
+  });
+
   describe("getPullRequest", () => {
     it("returns parsed PR data", async () => {
       const prData = { pullRequestId: 42, sourceRefName: "refs/heads/feature" };
       mockRequest.mockResolvedValueOnce(mockResponse(200, prData));
 
-      const result = await client.getPullRequest("repo-1", 42);
+      const result = await client.getPullRequest(VALID_REPO_ID, 42);
       expect(result).toEqual(prData);
       expect(mockRequest).toHaveBeenCalledTimes(1);
       const [url] = mockRequest.mock.calls[0];
-      expect(url).toContain("/repositories/repo-1/pullRequests/42");
+      expect(url).toContain(`/repositories/${VALID_REPO_ID}/pullRequests/42`);
     });
 
     it("throws AdoClientError on 404", async () => {
       mockRequest.mockResolvedValueOnce(mockResponse(404, "Not found"));
 
-      await expect(client.getPullRequest("repo-1", 999)).rejects.toThrow(AdoClientError);
+      await expect(client.getPullRequest(VALID_REPO_ID, 999)).rejects.toThrow(AdoClientError);
     });
   });
 
   describe("listPullRequestChanges", () => {
-    it("extracts file paths from changes", async () => {
+    it("extracts file paths from iteration changes", async () => {
+      // First call: iterations
+      mockRequest.mockResolvedValueOnce(
+        mockResponse(200, { value: [{ id: 1 }, { id: 2 }] })
+      );
+      // Second call: iteration changes
       mockRequest.mockResolvedValueOnce(
         mockResponse(200, {
-          changes: [
+          changeEntries: [
             { item: { path: "/src/a.ts" } },
             { item: { path: "/src/b.ts" } },
             { item: { path: "/src/a.ts" } },
@@ -86,14 +122,50 @@ describe("AdoClient", () => {
         })
       );
 
-      const paths = await client.listPullRequestChanges("repo-1", 42);
+      const paths = await client.listPullRequestChanges(VALID_REPO_ID, 42);
       expect(paths).toEqual(["/src/a.ts", "/src/b.ts"]);
+      expect(mockRequest).toHaveBeenCalledTimes(2);
+      const [secondUrl] = mockRequest.mock.calls[1];
+      expect(secondUrl).toContain("/iterations/2/changes");
     });
 
-    it("returns empty array when no changes", async () => {
-      mockRequest.mockResolvedValueOnce(mockResponse(200, { changes: [] }));
-      const paths = await client.listPullRequestChanges("repo-1", 42);
+    it("returns empty array when no change entries", async () => {
+      mockRequest.mockResolvedValueOnce(
+        mockResponse(200, { value: [{ id: 1 }] })
+      );
+      mockRequest.mockResolvedValueOnce(
+        mockResponse(200, { changeEntries: [] })
+      );
+
+      const paths = await client.listPullRequestChanges(VALID_REPO_ID, 42);
       expect(paths).toEqual([]);
+    });
+
+    it("throws AdoClientError when iterations are empty", async () => {
+      mockRequest.mockResolvedValueOnce(
+        mockResponse(200, { value: [] })
+      );
+
+      await expect(client.listPullRequestChanges(VALID_REPO_ID, 42)).rejects.toThrow(
+        /No iterations found/
+      );
+    });
+
+    it("falls back to originalPath when item.path is missing (rename scenario)", async () => {
+      mockRequest.mockResolvedValueOnce(
+        mockResponse(200, { value: [{ id: 1 }] })
+      );
+      mockRequest.mockResolvedValueOnce(
+        mockResponse(200, {
+          changeEntries: [
+            { item: { path: "/src/new-name.ts" } },
+            { originalPath: "/src/old-name.ts", item: {} }
+          ]
+        })
+      );
+
+      const paths = await client.listPullRequestChanges(VALID_REPO_ID, 42);
+      expect(paths).toEqual(["/src/new-name.ts", "/src/old-name.ts"]);
     });
   });
 
@@ -101,7 +173,7 @@ describe("AdoClient", () => {
     it("returns text content", async () => {
       mockRequest.mockResolvedValueOnce(mockResponse(200, "file contents here"));
 
-      const content = await client.getItemContent("repo-1", "/src/app.ts", {
+      const content = await client.getItemContent(VALID_REPO_ID, "/src/app.ts", {
         version: "abc123",
         versionType: "commit"
       });
@@ -112,11 +184,49 @@ describe("AdoClient", () => {
       mockRequest.mockResolvedValueOnce(mockResponse(500, "Internal Server Error"));
 
       await expect(
-        client.getItemContent("repo-1", "/src/app.ts", {
+        client.getItemContent(VALID_REPO_ID, "/src/app.ts", {
           version: "abc123",
           versionType: "commit"
         })
       ).rejects.toThrow(AdoClientError);
+    });
+  });
+
+  describe("debug logging", () => {
+    it("logs response status at debug level for requestJson", async () => {
+      const debugFn = vi.fn();
+      const mockLogger = { debug: debugFn } as any;
+      const logClient = new AdoClient(makeConfig(), mockLogger);
+
+      mockRequest.mockResolvedValueOnce(mockResponse(200, { pullRequestId: 42 }));
+      await logClient.getPullRequest(VALID_REPO_ID, 42);
+
+      expect(debugFn).toHaveBeenCalledWith(
+        expect.objectContaining({ method: "GET", statusCode: 200 }),
+        "ADO API response"
+      );
+    });
+
+    it("logs response status at debug level for requestText", async () => {
+      const debugFn = vi.fn();
+      const mockLogger = { debug: debugFn } as any;
+      const logClient = new AdoClient(makeConfig(), mockLogger);
+
+      mockRequest.mockResolvedValueOnce(mockResponse(200, "file contents"));
+      await logClient.getItemContent(VALID_REPO_ID, "/src/app.ts", {
+        version: "abc123",
+        versionType: "commit"
+      });
+
+      expect(debugFn).toHaveBeenCalledWith(
+        expect.objectContaining({ method: "GET", statusCode: 200 }),
+        "ADO API response"
+      );
+    });
+
+    it("works without logger (optional parameter)", async () => {
+      mockRequest.mockResolvedValueOnce(mockResponse(200, { pullRequestId: 42 }));
+      await expect(client.getPullRequest(VALID_REPO_ID, 42)).resolves.not.toThrow();
     });
   });
 
@@ -125,7 +235,7 @@ describe("AdoClient", () => {
       mockRequest.mockResolvedValueOnce(mockResponse(200, { id: 1 }));
 
       await expect(
-        client.createPullRequestThread("repo-1", 42, {
+        client.createPullRequestThread(VALID_REPO_ID, 42, {
           status: 1,
           comments: [{ parentCommentId: 0, commentType: 1, content: "test" }],
           threadContext: {

@@ -33,6 +33,12 @@ afterEach(() => {
 });
 
 describe("MockLLMProvider", () => {
+  it("exposes providerName and modelName", () => {
+    const provider = new MockLLMProvider();
+    expect(provider.providerName).toBe("mock");
+    expect(provider.modelName).toBe("mock");
+  });
+
   it("returns local context for llm1 stage", async () => {
     const provider = new MockLLMProvider();
     const schema = z.object({
@@ -194,6 +200,12 @@ describe("MockLLMProvider", () => {
 });
 
 describe("AnthropicProvider", () => {
+  it("exposes providerName and modelName", () => {
+    const provider = new AnthropicProvider({ apiKey: "test-key", model: "claude-3-sonnet" });
+    expect(provider.providerName).toBe("anthropic");
+    expect(provider.modelName).toBe("claude-3-sonnet");
+  });
+
   it("parses a valid response", async () => {
     mockRequest.mockResolvedValueOnce(
       mockResponse(200, {
@@ -229,6 +241,12 @@ describe("AnthropicProvider", () => {
 });
 
 describe("OpenAIResponsesProvider", () => {
+  it("exposes providerName and modelName", () => {
+    const provider = new OpenAIResponsesProvider({ apiKey: "test-key", model: "gpt-4o" });
+    expect(provider.providerName).toBe("openai");
+    expect(provider.modelName).toBe("gpt-4o");
+  });
+
   it("parses a valid response via output_text", async () => {
     mockRequest.mockResolvedValueOnce(
       mockResponse(200, { output_text: '{"findings":[]}' })
@@ -262,6 +280,16 @@ describe("OpenAIResponsesProvider", () => {
 });
 
 describe("AzureOpenAIProvider", () => {
+  it("exposes providerName and modelName from deployment", () => {
+    const provider = new AzureOpenAIProvider({
+      endpoint: "https://myendpoint.openai.azure.com",
+      apiKey: "test-key",
+      deployment: "gpt-4o-deploy"
+    });
+    expect(provider.providerName).toBe("azure_openai");
+    expect(provider.modelName).toBe("gpt-4o-deploy");
+  });
+
   it("parses a valid chat completions response", async () => {
     mockRequest.mockResolvedValueOnce(
       mockResponse(200, {

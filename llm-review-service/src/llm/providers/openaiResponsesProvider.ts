@@ -65,19 +65,22 @@ function extractOutputText(json: unknown): string {
 }
 
 export class OpenAIResponsesProvider implements LLMClient {
+  readonly providerName = "openai";
   private readonly apiKey: string;
-  private readonly model: string;
+  private readonly opts: OpenAIResponsesProviderOptions;
+
+  get modelName() { return this.opts.model; }
 
   constructor(opts: OpenAIResponsesProviderOptions) {
+    this.opts = opts;
     this.apiKey = opts.apiKey;
-    this.model = opts.model;
   }
 
   async completeJSON<T>(args: LLMCompleteJSONArgs<T>): Promise<T> {
     const url = "https://api.openai.com/v1/responses";
 
     const body = {
-      model: this.model,
+      model: this.opts.model,
       input: [
         { role: "system", content: args.system },
         { role: "user", content: args.prompt }

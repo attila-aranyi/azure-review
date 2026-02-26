@@ -37,6 +37,8 @@ export type LLMCompleteJSONArgs<T> = {
 };
 
 export interface LLMClient {
+  readonly providerName: string;
+  readonly modelName: string;
   completeJSON<T>(args: LLMCompleteJSONArgs<T>): Promise<T>;
 }
 

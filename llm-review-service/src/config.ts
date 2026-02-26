@@ -72,7 +72,22 @@ const envSchema = z
 
     A11Y_FILE_EXTENSIONS: commaSeparatedList().default([".html", ".jsx", ".tsx", ".vue", ".svelte", ".css", ".scss"]),
 
-    REDIS_URL: optionalNonEmpty()
+    REDIS_URL: optionalNonEmpty(),
+
+    AUDIT_ENABLED: z.preprocess(
+      (v) => {
+        if (v === undefined) return true;
+        if (typeof v === "boolean") return v;
+        if (typeof v === "string") {
+          const lower = v.trim().toLowerCase();
+          if (lower === "" || lower === "false" || lower === "0" || lower === "no") return false;
+          return true;
+        }
+        return Boolean(v);
+      },
+      z.boolean().default(true)
+    ),
+    AUDIT_RETENTION_DAYS: z.coerce.number().int().positive().default(30)
   })
   .passthrough();
 

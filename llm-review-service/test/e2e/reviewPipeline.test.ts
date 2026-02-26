@@ -77,7 +77,7 @@ describe("E2E review pipeline", () => {
       const method = (opts as { method?: string })?.method ?? "GET";
 
       // getPullRequest
-      if (urlStr.includes("/pullRequests/42") && !urlStr.includes("/changes") && !urlStr.includes("/threads")) {
+      if (urlStr.includes("/pullRequests/42") && !urlStr.includes("/iterations") && !urlStr.includes("/threads")) {
         return mockResponse(200, {
           pullRequestId: 42,
           lastMergeSourceCommit: { commitId: "source-abc" },
@@ -85,10 +85,15 @@ describe("E2E review pipeline", () => {
         });
       }
 
-      // listPullRequestChanges
-      if (urlStr.includes("/pullRequests/42/changes")) {
+      // listPullRequestChanges — iterations list
+      if (urlStr.includes("/pullRequests/42/iterations") && !urlStr.includes("/changes")) {
+        return mockResponse(200, { value: [{ id: 1 }] });
+      }
+
+      // listPullRequestChanges — iteration changes
+      if (urlStr.includes("/iterations/1/changes")) {
         return mockResponse(200, {
-          changes: [{ item: { path: "/src/greet.ts" } }]
+          changeEntries: [{ item: { path: "/src/greet.ts" } }]
         });
       }
 
@@ -128,7 +133,7 @@ describe("E2E review pipeline", () => {
       payload: {
         resource: {
           pullRequestId: 42,
-          repository: { id: "repo-e2e" }
+          repository: { id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890" }
         }
       }
     });
@@ -165,16 +170,19 @@ describe("E2E review pipeline", () => {
       const urlStr = typeof url === "string" ? url : url.toString();
       const method = (opts as { method?: string })?.method ?? "GET";
 
-      if (urlStr.includes("/pullRequests/43") && !urlStr.includes("/changes") && !urlStr.includes("/threads")) {
+      if (urlStr.includes("/pullRequests/43") && !urlStr.includes("/iterations") && !urlStr.includes("/threads")) {
         return mockResponse(200, {
           pullRequestId: 43,
           lastMergeSourceCommit: { commitId: "src-a11y" },
           lastMergeTargetCommit: { commitId: "tgt-a11y" }
         });
       }
-      if (urlStr.includes("/pullRequests/43/changes")) {
+      if (urlStr.includes("/pullRequests/43/iterations") && !urlStr.includes("/changes")) {
+        return mockResponse(200, { value: [{ id: 1 }] });
+      }
+      if (urlStr.includes("/iterations/1/changes")) {
         return mockResponse(200, {
-          changes: [{ item: { path: "/src/page.html" } }]
+          changeEntries: [{ item: { path: "/src/page.html" } }]
         });
       }
       if (urlStr.includes("/items") && urlStr.includes("tgt-a11y")) {
@@ -201,7 +209,7 @@ describe("E2E review pipeline", () => {
       payload: {
         resource: {
           pullRequestId: 43,
-          repository: { id: "repo-a11y" }
+          repository: { id: "b2c3d4e5-f6a7-8901-bcde-f12345678901" }
         }
       }
     });

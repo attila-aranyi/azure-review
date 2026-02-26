@@ -44,12 +44,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export class AnthropicProvider implements LLMClient {
+  readonly providerName = "anthropic";
   private readonly apiKey: string;
-  private readonly model: string;
+  private readonly opts: AnthropicProviderOptions;
+
+  get modelName() { return this.opts.model; }
 
   constructor(opts: AnthropicProviderOptions) {
+    this.opts = opts;
     this.apiKey = opts.apiKey;
-    this.model = opts.model;
   }
 
   async completeJSON<T>(args: LLMCompleteJSONArgs<T>): Promise<T> {
@@ -63,7 +66,7 @@ export class AnthropicProvider implements LLMClient {
       try {
         const prompt = attempt === 1 ? args.prompt : `${args.prompt}\n\nReturn ONLY valid JSON.`;
         const body = {
-          model: this.model,
+          model: this.opts.model,
           temperature: 0,
           max_tokens: 2048,
           system: args.system,
