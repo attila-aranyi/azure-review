@@ -13,7 +13,6 @@ variables:
   resourceGroup: "rg-code-review"
   containerAppName: "ca-llm-review"
   nodeVersion: "20"
-  serviceDir: "llm-review-service"
 
 stages:
   # ── Stage 1: Build & Test ──────────────────────────────────────────
@@ -28,25 +27,28 @@ stages:
             inputs:
               versionSpec: $(nodeVersion)
 
+          - script: |
+              echo "PWD: $(pwd)"
+              echo "Build.SourcesDirectory: $(Build.SourcesDirectory)"
+              ls -la $(Build.SourcesDirectory)
+              echo "---"
+              ls -la
+            displayName: "Debug: show workspace layout"
+
           - script: npm ci
             displayName: "Install dependencies"
-            workingDirectory: $(serviceDir)
 
           - script: npm run lint
             displayName: "Lint"
-            workingDirectory: $(serviceDir)
 
           - script: npm run typecheck
             displayName: "Type check"
-            workingDirectory: $(serviceDir)
 
           - script: npm run build
             displayName: "Build"
-            workingDirectory: $(serviceDir)
 
           - script: npm run test:coverage
             displayName: "Test with coverage"
-            workingDirectory: $(serviceDir)
 
           - task: PublishTestResults@2
             displayName: "Publish test results"
@@ -72,7 +74,6 @@ stages:
               azureSubscription: $(azureSubscription)
               scriptType: bash
               scriptLocation: inlineScript
-              workingDirectory: $(serviceDir)
               inlineScript: |
                 az acr build \
                   --registry $(acrName) \
