@@ -96,6 +96,14 @@ export async function createFileAuditStore(args: {
 
   let records: AuditRecord[] = [];
 
+  // Simple async mutex to serialize file writes
+  let writeLock: Promise<void> = Promise.resolve();
+  function withWriteLock(fn: () => Promise<void>): Promise<void> {
+    const next = writeLock.then(fn, fn);
+    writeLock = next.then(() => {}, () => {});
+    return next;
+  }
+
   try {
     const content = await fs.readFile(filePath, "utf8");
     for (const line of content.split("\n")) {
@@ -130,15 +138,19 @@ export async function createFileAuditStore(args: {
   }
 
   const interval = setInterval(() => {
-    pruneExpired();
-    void rewriteFile().catch(() => {});
+    void withWriteLock(async () => {
+      pruneExpired();
+      await rewriteFile().catch(() => {});
+    });
   }, 6 * 60 * 60 * 1000);
   interval.unref();
 
   return {
     async append(record) {
-      records.push(record);
-      await fs.appendFile(filePath, JSON.stringify(record) + "\n", "utf8");
+      await withWriteLock(async () => {
+        records.push(record);
+        await fs.appendFile(filePath, JSON.stringify(record) + "\n", "utf8");
+      });
     },
     async query(filter) {
       pruneExpired();

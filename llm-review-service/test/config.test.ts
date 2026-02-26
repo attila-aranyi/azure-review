@@ -75,4 +75,19 @@ describe("config", () => {
     const config = loadConfig({ ...baseEnv, AUDIT_RETENTION_DAYS: "7" });
     expect(config.AUDIT_RETENTION_DAYS).toBe(7);
   });
+
+  it("AUDIT_ENABLED accepts case-insensitive 'TRUE'", () => {
+    const config = loadConfig({ ...baseEnv, AUDIT_ENABLED: "TRUE" });
+    expect(config.AUDIT_ENABLED).toBe(true);
+  });
+
+  it("AUDIT_ENABLED accepts '1' as truthy", () => {
+    const config = loadConfig({ ...baseEnv, AUDIT_ENABLED: "1" });
+    expect(config.AUDIT_ENABLED).toBe(true);
+  });
+
+  it("AUDIT_ENABLED treats empty string as false", () => {
+    const config = loadConfig({ ...baseEnv, AUDIT_ENABLED: "" });
+    expect(config.AUDIT_ENABLED).toBe(false);
+  });
 });

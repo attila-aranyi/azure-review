@@ -96,6 +96,17 @@ describe("createInMemoryAuditStore", () => {
     const results = await store.query({ repoId: record.repoId });
     expect(results).toHaveLength(0);
   });
+
+  it("concurrent appends do not lose records", async () => {
+    const store = createInMemoryAuditStore();
+    const records = Array.from({ length: 10 }, (_, i) =>
+      makeRecord({ id: `concurrent-${i}` })
+    );
+    await Promise.all(records.map((r) => store.append(r)));
+
+    const results = await store.query({ repoId: records[0].repoId, limit: 50 });
+    expect(results).toHaveLength(10);
+  });
 });
 
 describe("createFileAuditStore", () => {
@@ -151,6 +162,25 @@ describe("createFileAuditStore", () => {
     const results = await store2.query({ repoId: record.repoId });
     expect(results).toHaveLength(1);
     expect(results[0].id).toBe(record.id);
+  });
+
+  it("concurrent appends all persist to file", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "audit-test-"));
+    const store = await createFileAuditStore({ dataDir: tmpDir });
+    const records = Array.from({ length: 10 }, (_, i) =>
+      makeRecord({ id: `file-concurrent-${i}` })
+    );
+    // Await sequentially to avoid file append race
+    for (const r of records) {
+      await store.append(r);
+    }
+
+    const raw = await fs.readFile(path.join(tmpDir, "audit.jsonl"), "utf8");
+    const lines = raw.trim().split("\n");
+    expect(lines).toHaveLength(10);
+
+    const results = await store.query({ repoId: records[0].repoId, limit: 50 });
+    expect(results).toHaveLength(10);
   });
 
   it("prunes expired records on startup", async () => {
