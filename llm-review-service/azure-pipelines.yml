@@ -67,19 +67,22 @@ stages:
         displayName: "Build & push image to ACR"
         steps:
           - task: AzureCLI@2
-            displayName: "Build and push image to ACR"
+            displayName: "Login to ACR, build and push image"
             inputs:
               azureSubscription: $(azureSubscription)
               scriptType: bash
               scriptLocation: inlineScript
               workingDirectory: $(serviceDir)
               inlineScript: |
-                az acr build \
-                  --registry $(acrName) \
-                  --image $(imageName):$(Build.BuildId) \
-                  --image $(imageName):latest \
-                  --file Dockerfile \
-                  .
+                ACR_SERVER=$(az acr show --name $(acrName) --query loginServer -o tsv)
+                az acr credential show --name $(acrName) --query "passwords[0].value" -o tsv | \
+                  docker login "$ACR_SERVER" --username $(acrName) --password-stdin
+
+                docker build -t "$ACR_SERVER/$(imageName):$(Build.BuildId)" \
+                             -t "$ACR_SERVER/$(imageName):latest" \
+                             .
+                docker push "$ACR_SERVER/$(imageName):$(Build.BuildId)"
+                docker push "$ACR_SERVER/$(imageName):latest"
 
   # ── Stage 3: Deploy to Azure Container Apps ────────────────────────
   - stage: Deploy
