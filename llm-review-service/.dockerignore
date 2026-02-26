@@ -7,4 +7,3 @@ test
 *.md
 .eslintrc.cjs
 vitest.config.ts
-tsconfig.json
