@@ -72,7 +72,13 @@ const envSchema = z
 
     A11Y_FILE_EXTENSIONS: commaSeparatedList().default([".html", ".jsx", ".tsx", ".vue", ".svelte", ".css", ".scss"]),
 
-    REDIS_URL: optionalNonEmpty()
+    REDIS_URL: optionalNonEmpty(),
+
+    AUDIT_ENABLED: z.preprocess(
+      (v) => v === "true" || v === true || v === undefined,
+      z.boolean().default(true)
+    ),
+    AUDIT_RETENTION_DAYS: z.coerce.number().int().positive().default(30)
   })
   .passthrough();
 

@@ -55,4 +55,24 @@ describe("config", () => {
     expect(config.LLM3_ENABLED).toBe(true);
     expect(config.LLM3_PROVIDER).toBe("mock");
   });
+
+  it("AUDIT_ENABLED defaults to true", () => {
+    const config = loadConfig({ ...baseEnv });
+    expect(config.AUDIT_ENABLED).toBe(true);
+  });
+
+  it("AUDIT_ENABLED can be set to false", () => {
+    const config = loadConfig({ ...baseEnv, AUDIT_ENABLED: "false" });
+    expect(config.AUDIT_ENABLED).toBe(false);
+  });
+
+  it("AUDIT_RETENTION_DAYS defaults to 30", () => {
+    const config = loadConfig({ ...baseEnv });
+    expect(config.AUDIT_RETENTION_DAYS).toBe(30);
+  });
+
+  it("AUDIT_RETENTION_DAYS can be overridden", () => {
+    const config = loadConfig({ ...baseEnv, AUDIT_RETENTION_DAYS: "7" });
+    expect(config.AUDIT_RETENTION_DAYS).toBe(7);
+  });
 });

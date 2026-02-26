@@ -192,6 +192,44 @@ describe("AdoClient", () => {
     });
   });
 
+  describe("debug logging", () => {
+    it("logs response status at debug level for requestJson", async () => {
+      const debugFn = vi.fn();
+      const mockLogger = { debug: debugFn } as any;
+      const logClient = new AdoClient(makeConfig(), mockLogger);
+
+      mockRequest.mockResolvedValueOnce(mockResponse(200, { pullRequestId: 42 }));
+      await logClient.getPullRequest(VALID_REPO_ID, 42);
+
+      expect(debugFn).toHaveBeenCalledWith(
+        expect.objectContaining({ method: "GET", statusCode: 200 }),
+        "ADO API response"
+      );
+    });
+
+    it("logs response status at debug level for requestText", async () => {
+      const debugFn = vi.fn();
+      const mockLogger = { debug: debugFn } as any;
+      const logClient = new AdoClient(makeConfig(), mockLogger);
+
+      mockRequest.mockResolvedValueOnce(mockResponse(200, "file contents"));
+      await logClient.getItemContent(VALID_REPO_ID, "/src/app.ts", {
+        version: "abc123",
+        versionType: "commit"
+      });
+
+      expect(debugFn).toHaveBeenCalledWith(
+        expect.objectContaining({ method: "GET", statusCode: 200 }),
+        "ADO API response"
+      );
+    });
+
+    it("works without logger (optional parameter)", async () => {
+      mockRequest.mockResolvedValueOnce(mockResponse(200, { pullRequestId: 42 }));
+      await expect(client.getPullRequest(VALID_REPO_ID, 42)).resolves.not.toThrow();
+    });
+  });
+
   describe("createPullRequestThread", () => {
     it("posts thread successfully", async () => {
       mockRequest.mockResolvedValueOnce(mockResponse(200, { id: 1 }));

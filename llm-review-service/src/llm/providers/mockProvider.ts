@@ -15,6 +15,9 @@ function extractLineValue(haystack: string, key: string): string | undefined {
 }
 
 export class MockLLMProvider implements LLMClient {
+  readonly providerName = "mock";
+  readonly modelName = "mock";
+
   async completeJSON<T>(args: LLMCompleteJSONArgs<T>): Promise<T> {
     if (args.stage === "llm1") {
       const localContext =

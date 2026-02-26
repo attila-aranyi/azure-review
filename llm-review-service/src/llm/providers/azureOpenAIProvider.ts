@@ -45,19 +45,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export class AzureOpenAIProvider implements LLMClient {
+  readonly providerName = "azure_openai";
   private readonly endpoint: string;
   private readonly apiKey: string;
-  private readonly deployment: string;
+  private readonly opts: AzureOpenAIProviderOptions;
+
+  get modelName() { return this.opts.deployment; }
 
   constructor(opts: AzureOpenAIProviderOptions) {
+    this.opts = opts;
     this.endpoint = opts.endpoint.replace(/\/+$/, "");
     this.apiKey = opts.apiKey;
-    this.deployment = opts.deployment;
   }
 
   async completeJSON<T>(args: LLMCompleteJSONArgs<T>): Promise<T> {
     const url = `${this.endpoint}/openai/deployments/${encodeURIComponent(
-      this.deployment
+      this.opts.deployment
     )}/chat/completions?api-version=2024-06-01`;
 
     const body = {

@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { request } from "undici";
 import type { Dispatcher } from "undici";
+import type { Logger } from "pino";
 import type { Config } from "../config";
 import type { AdoCreateThreadRequest, AdoIterationsResponse, AdoListPullRequestChangesResponse, AdoPullRequest } from "./adoTypes";
 
@@ -25,10 +26,12 @@ export class AdoClientError extends Error {
 export class AdoClient {
   private readonly baseUrl: string;
   private readonly authHeader: string;
+  private readonly logger?: Logger;
 
-  constructor(private readonly config: Config) {
+  constructor(private readonly config: Config, logger?: Logger) {
     this.baseUrl = `https://dev.azure.com/${this.config.ADO_ORG}/${this.config.ADO_PROJECT}/_apis/git`;
     this.authHeader = `Basic ${Buffer.from(`:${this.config.ADO_PAT}`).toString("base64")}`;
+    this.logger = logger;
   }
 
   private assertValidRepoId(repoId: string): void {
@@ -53,6 +56,7 @@ export class AdoClient {
     });
 
     const text = await res.body.text();
+    this.logger?.debug({ method, statusCode: res.statusCode }, "ADO API response");
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw new AdoClientError(`Azure DevOps API request failed: ${res.statusCode}`, {
         statusCode: res.statusCode,
@@ -77,6 +81,7 @@ export class AdoClient {
       }
     });
     const text = await res.body.text();
+    this.logger?.debug({ method, statusCode: res.statusCode }, "ADO API response");
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw new AdoClientError(`Azure DevOps API request failed: ${res.statusCode}`, {
         statusCode: res.statusCode,

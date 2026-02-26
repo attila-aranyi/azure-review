@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { Config } from "../config";
 import { runReview } from "../review/runReview";
 import type { ReviewQueue } from "../review/queue";
+import type { AuditStore } from "../review/audit";
 
 function timingSafeEqual(a: string, b: string): boolean {
   const bufA = new Uint8Array(Buffer.from(a));
@@ -16,7 +17,7 @@ function timingSafeEqual(a: string, b: string): boolean {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
-export const registerWebhookRoutes: FastifyPluginAsync<{ config: Config; queue: ReviewQueue }> = async (
+export const registerWebhookRoutes: FastifyPluginAsync<{ config: Config; queue: ReviewQueue; auditStore?: AuditStore }> = async (
   app,
   opts
 ) => {
@@ -78,7 +79,7 @@ export const registerWebhookRoutes: FastifyPluginAsync<{ config: Config; queue: 
         const timeoutMs = 120_000;
         setImmediate(() => {
           void Promise.race([
-            runReview({ config: opts.config, repoId, prId, requestId: request.id }),
+            runReview({ config: opts.config, repoId, prId, requestId: request.id, auditStore: opts.auditStore }),
             new Promise<void>((_, reject) =>
               setTimeout(() => reject(new Error("review timeout")), timeoutMs)
             )
