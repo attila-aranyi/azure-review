@@ -50,13 +50,10 @@ az acr create \
   --name "$ACR_NAME" \
   --resource-group "$RESOURCE_GROUP" \
   --sku Basic \
-  --admin-enabled true \
   --output none
 
-echo "==> Retrieving ACR credentials"
+echo "==> Retrieving ACR login server"
 ACR_LOGIN_SERVER=$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)
-ACR_USERNAME=$(az acr credential show --name "$ACR_NAME" --query username -o tsv)
-ACR_PASSWORD=$(az acr credential show --name "$ACR_NAME" --query "passwords[0].value" -o tsv)
 
 echo "==> Creating Container Apps Environment: $CAE_NAME"
 az containerapp env create \
@@ -65,37 +62,34 @@ az containerapp env create \
   --location "$LOCATION" \
   --output none
 
-echo "==> Building and pushing Docker image to ACR"
-az acr build \
-  --registry "$ACR_NAME" \
-  --image llm-review-service:initial \
-  --file Dockerfile \
-  . \
-  --output none
-
 echo "==> Creating Container App: $CA_NAME"
+# :latest is used only for the initial deploy; CI pushes commit-SHA tags afterwards
+echo "    (Using latest image from ACR — pushed by the CI pipeline)"
 az containerapp create \
   --name "$CA_NAME" \
   --resource-group "$RESOURCE_GROUP" \
   --environment "$CAE_NAME" \
-  --image "${ACR_LOGIN_SERVER}/llm-review-service:initial" \
+  --image "${ACR_LOGIN_SERVER}/llm-review-service:latest" \
   --registry-server "$ACR_LOGIN_SERVER" \
-  --registry-username "$ACR_USERNAME" \
-  --registry-password "$ACR_PASSWORD" \
+  --registry-identity system \
   --target-port "$TARGET_PORT" \
   --ingress external \
-  --min-replicas 0 \
+  --min-replicas 1 `# keep at least 1 replica to avoid cold-start timeouts on webhook delivery` \
   --max-replicas 1 \
+  --secrets \
+    webhook-secret="$WEBHOOK_SECRET" \
+    ado-pat="$ADO_PAT" \
+    anthropic-api-key="$ANTHROPIC_API_KEY" \
   --env-vars \
     PORT="$TARGET_PORT" \
     NODE_ENV="production" \
-    WEBHOOK_SECRET="$WEBHOOK_SECRET" \
+    WEBHOOK_SECRET=secretref:webhook-secret \
     ADO_ORG="$ADO_ORG" \
     ADO_PROJECT="$ADO_PROJECT" \
-    ADO_PAT="$ADO_PAT" \
+    ADO_PAT=secretref:ado-pat \
     LLM1_PROVIDER="$LLM1_PROVIDER" \
     LLM2_PROVIDER="$LLM2_PROVIDER" \
-    ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+    ANTHROPIC_API_KEY=secretref:anthropic-api-key \
     ANTHROPIC_MODEL_LLM1="${ANTHROPIC_MODEL_LLM1:-claude-sonnet-4-6}" \
     ANTHROPIC_MODEL_LLM2="${ANTHROPIC_MODEL_LLM2:-claude-sonnet-4-6}" \
     LLM3_ENABLED="${LLM3_ENABLED:-false}" \
@@ -107,6 +101,20 @@ az containerapp create \
     TOKEN_BUDGET_LLM2="${TOKEN_BUDGET_LLM2:-6000}" \
     RATE_LIMIT_MAX="${RATE_LIMIT_MAX:-30}" \
     RATE_LIMIT_WINDOW_MS="${RATE_LIMIT_WINDOW_MS:-60000}" \
+  --output none
+
+# ── Grant AcrPull to the Container App's managed identity ─────────
+echo "==> Assigning AcrPull role to Container App managed identity"
+CA_PRINCIPAL_ID=$(az containerapp show \
+  --name "$CA_NAME" \
+  --resource-group "$RESOURCE_GROUP" \
+  --query "identity.principalId" -o tsv)
+ACR_RESOURCE_ID=$(az acr show --name "$ACR_NAME" --query id -o tsv)
+
+az role assignment create \
+  --assignee "$CA_PRINCIPAL_ID" \
+  --role AcrPull \
+  --scope "$ACR_RESOURCE_ID" \
   --output none
 
 # ── Output ─────────────────────────────────────────────────────────
@@ -132,6 +140,6 @@ echo "   2. Configure Azure DevOps service hook:"
 echo "      - Go to Project Settings > Service hooks > + > Web Hooks"
 echo "      - Trigger: Pull request created / updated"
 echo "      - URL: https://${FQDN}/webhooks/azure-devops/pr"
-echo "      - HTTP header: x-webhook-secret: ${WEBHOOK_SECRET}"
+echo "      - HTTP header: x-webhook-secret: <see your .env.azure file>"
 echo "   3. Create a test PR to verify end-to-end"
 echo "========================================================"

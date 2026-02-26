@@ -13,6 +13,7 @@ export type AdoPullRequest = {
 
 export type AdoPullRequestChange = {
   changeType?: string;
+  originalPath?: string;
   item?: {
     path?: string;
     gitObjectType?: string;
@@ -20,7 +21,11 @@ export type AdoPullRequestChange = {
 };
 
 export type AdoListPullRequestChangesResponse = {
-  changes?: AdoPullRequestChange[];
+  changeEntries?: AdoPullRequestChange[];
+};
+
+export type AdoIterationsResponse = {
+  value?: { id: number }[];
 };
 
 export type AdoThreadContext = {
