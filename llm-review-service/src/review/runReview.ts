@@ -71,28 +71,30 @@ export async function runReview(_args: {
   let changedFilePaths: string[] = [];
   let hunks: DiffHunk[] = [];
 
-  // ── Post initial status + summary comment ──
   const statusContext = { name: "marvin-code-review", genre: "llm-review" };
-
-  await safeAdoCall(
-    () => ado.createPullRequestStatus(repoId, prId, {
-      state: "pending",
-      description: buildStatusDescription("pending"),
-      context: statusContext,
-    }),
-    logger,
-    "post-pending-status"
-  );
-
-  const summaryThread = await safeAdoCall(
-    () => ado.createPullRequestThread(repoId, prId, buildStartingSummary()),
-    logger,
-    "post-summary-thread"
-  );
-  const summaryThreadId = summaryThread?.id;
-  const summaryCommentId = summaryThread?.comments?.[0]?.id;
+  let summaryThreadId: number | undefined;
+  let summaryCommentId: number | undefined;
 
   try {
+    // ── Post initial status + summary comment ──
+    await safeAdoCall(
+      () => ado.createPullRequestStatus(repoId, prId, {
+        state: "pending",
+        description: buildStatusDescription("pending"),
+        context: statusContext,
+      }),
+      logger,
+      "post-pending-status"
+    );
+
+    const summaryThread = await safeAdoCall(
+      () => ado.createPullRequestThread(repoId, prId, buildStartingSummary()),
+      logger,
+      "post-summary-thread"
+    );
+    summaryThreadId = summaryThread?.id;
+    summaryCommentId = summaryThread?.comments?.[0]?.id;
+
     logger.info("Review start");
 
     const { result: prResult, ms: prMs } = await withTiming("fetchPR", () =>
@@ -400,7 +402,7 @@ export async function runReview(_args: {
 
     if (summaryThreadId != null && summaryCommentId != null) {
       await safeAdoCall(
-        () => ado.updateThreadComment(repoId, prId, summaryThreadId, summaryCommentId, {
+        () => ado.updateThreadComment(repoId, prId, summaryThreadId!, summaryCommentId!, {
           content: buildCompletedSummaryContent(summaryStats),
         }),
         logger,
