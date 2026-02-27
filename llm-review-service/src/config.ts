@@ -45,11 +45,17 @@ const envSchema = z
       (v) => v === "true" || v === true,
       z.boolean().default(false)
     ),
+    LLM4_PROVIDER: providerEnum.optional(),
+    LLM4_ENABLED: z.preprocess(
+      (v) => v === "true" || v === true,
+      z.boolean().default(false)
+    ),
 
     OPENAI_API_KEY: optionalNonEmpty(),
     OPENAI_MODEL_LLM1: optionalNonEmpty(),
     OPENAI_MODEL_LLM2: optionalNonEmpty(),
     OPENAI_MODEL_LLM3: optionalNonEmpty(),
+    OPENAI_MODEL_LLM4: optionalNonEmpty(),
 
     AZURE_OPENAI_ENDPOINT: optionalNonEmpty(),
     AZURE_OPENAI_API_KEY: optionalNonEmpty(),
@@ -61,6 +67,7 @@ const envSchema = z
     ANTHROPIC_MODEL_LLM1: optionalNonEmpty(),
     ANTHROPIC_MODEL_LLM2: optionalNonEmpty(),
     ANTHROPIC_MODEL_LLM3: optionalNonEmpty(),
+    ANTHROPIC_MODEL_LLM4: optionalNonEmpty(),
 
     MAX_FILES: z.coerce.number().int().positive().default(20),
     MAX_TOTAL_DIFF_LINES: z.coerce.number().int().positive().default(2000),
@@ -69,8 +76,15 @@ const envSchema = z
     TOKEN_BUDGET_LLM1: z.coerce.number().int().positive().default(3000),
     TOKEN_BUDGET_LLM2: z.coerce.number().int().positive().default(6000),
     TOKEN_BUDGET_LLM3: z.coerce.number().int().positive().default(4000),
+    TOKEN_BUDGET_LLM4: z.coerce.number().int().positive().default(8000),
 
     A11Y_FILE_EXTENSIONS: commaSeparatedList().default([".html", ".jsx", ".tsx", ".vue", ".svelte", ".css", ".scss"]),
+
+    VISUAL_A11Y_VIEWPORT_WIDTH: z.coerce.number().int().positive().default(1280),
+    VISUAL_A11Y_VIEWPORT_HEIGHT: z.coerce.number().int().positive().default(900),
+    VISUAL_A11Y_PAGES: commaSeparatedList().default([]),
+    VISUAL_A11Y_WAIT_MS: z.coerce.number().int().nonnegative().default(3000),
+    VISUAL_A11Y_MAX_SCREENSHOTS: z.coerce.number().int().positive().default(5),
 
     REDIS_URL: optionalNonEmpty(),
 
@@ -87,7 +101,10 @@ const envSchema = z
       },
       z.boolean().default(true)
     ),
-    AUDIT_RETENTION_DAYS: z.coerce.number().int().positive().default(30)
+    AUDIT_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
+
+    REVIEW_MIN_SEVERITY: z.enum(["low", "medium", "high", "critical"]).default("low"),
+    REVIEW_STRICTNESS: z.enum(["relaxed", "balanced", "strict"]).default("balanced")
   })
   .passthrough();
 
@@ -95,6 +112,7 @@ export type Config = z.infer<typeof envSchema> & {
   LLM1_PROVIDER: LLMProviderName;
   LLM2_PROVIDER: LLMProviderName;
   LLM3_PROVIDER?: LLMProviderName;
+  LLM4_PROVIDER?: LLMProviderName;
 };
 
 function requireProviderConfig(parsed: Config) {
@@ -111,19 +129,29 @@ function requireProviderConfig(parsed: Config) {
     throw new Error("Missing required env var LLM3_PROVIDER when LLM3_ENABLED=true");
   }
 
+  const llm4Enabled = parsed.LLM4_ENABLED === true;
+  if (llm4Enabled && !parsed.LLM4_PROVIDER) {
+    throw new Error("Missing required env var LLM4_PROVIDER when LLM4_ENABLED=true");
+  }
+  if (llm4Enabled && parsed.LLM4_PROVIDER === "azure_openai") {
+    throw new Error("Azure OpenAI does not support vision. Use anthropic or openai for LLM4.");
+  }
+
   const llm3Provider = llm3Enabled ? parsed.LLM3_PROVIDER : undefined;
+  const llm4Provider = llm4Enabled ? parsed.LLM4_PROVIDER : undefined;
 
   const needsOpenAI =
-    parsed.LLM1_PROVIDER === "openai" || parsed.LLM2_PROVIDER === "openai" || llm3Provider === "openai";
+    parsed.LLM1_PROVIDER === "openai" || parsed.LLM2_PROVIDER === "openai" || llm3Provider === "openai" || llm4Provider === "openai";
   const needsAzureOpenAI =
     parsed.LLM1_PROVIDER === "azure_openai" || parsed.LLM2_PROVIDER === "azure_openai" || llm3Provider === "azure_openai";
   const needsAnthropic =
-    parsed.LLM1_PROVIDER === "anthropic" || parsed.LLM2_PROVIDER === "anthropic" || llm3Provider === "anthropic";
+    parsed.LLM1_PROVIDER === "anthropic" || parsed.LLM2_PROVIDER === "anthropic" || llm3Provider === "anthropic" || llm4Provider === "anthropic";
 
   requireFor("OPENAI_API_KEY", needsOpenAI);
   requireFor("OPENAI_MODEL_LLM1", parsed.LLM1_PROVIDER === "openai");
   requireFor("OPENAI_MODEL_LLM2", parsed.LLM2_PROVIDER === "openai");
   requireFor("OPENAI_MODEL_LLM3", llm3Provider === "openai");
+  requireFor("OPENAI_MODEL_LLM4", llm4Provider === "openai");
 
   requireFor("AZURE_OPENAI_ENDPOINT", needsAzureOpenAI);
   requireFor("AZURE_OPENAI_API_KEY", needsAzureOpenAI);
@@ -135,6 +163,7 @@ function requireProviderConfig(parsed: Config) {
   requireFor("ANTHROPIC_MODEL_LLM1", parsed.LLM1_PROVIDER === "anthropic");
   requireFor("ANTHROPIC_MODEL_LLM2", parsed.LLM2_PROVIDER === "anthropic");
   requireFor("ANTHROPIC_MODEL_LLM3", llm3Provider === "anthropic");
+  requireFor("ANTHROPIC_MODEL_LLM4", llm4Provider === "anthropic");
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {

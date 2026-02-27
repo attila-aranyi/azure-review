@@ -90,4 +90,36 @@ describe("config", () => {
     const config = loadConfig({ ...baseEnv, AUDIT_ENABLED: "" });
     expect(config.AUDIT_ENABLED).toBe(false);
   });
+
+  it("REVIEW_MIN_SEVERITY defaults to low", () => {
+    const config = loadConfig({ ...baseEnv });
+    expect(config.REVIEW_MIN_SEVERITY).toBe("low");
+  });
+
+  it("REVIEW_MIN_SEVERITY accepts valid values", () => {
+    for (const val of ["low", "medium", "high", "critical"] as const) {
+      const config = loadConfig({ ...baseEnv, REVIEW_MIN_SEVERITY: val });
+      expect(config.REVIEW_MIN_SEVERITY).toBe(val);
+    }
+  });
+
+  it("REVIEW_MIN_SEVERITY rejects invalid values", () => {
+    expect(() => loadConfig({ ...baseEnv, REVIEW_MIN_SEVERITY: "none" })).toThrow();
+  });
+
+  it("REVIEW_STRICTNESS defaults to balanced", () => {
+    const config = loadConfig({ ...baseEnv });
+    expect(config.REVIEW_STRICTNESS).toBe("balanced");
+  });
+
+  it("REVIEW_STRICTNESS accepts valid values", () => {
+    for (const val of ["relaxed", "balanced", "strict"] as const) {
+      const config = loadConfig({ ...baseEnv, REVIEW_STRICTNESS: val });
+      expect(config.REVIEW_STRICTNESS).toBe(val);
+    }
+  });
+
+  it("REVIEW_STRICTNESS rejects invalid values", () => {
+    expect(() => loadConfig({ ...baseEnv, REVIEW_STRICTNESS: "ultra" })).toThrow();
+  });
 });

@@ -43,5 +43,5 @@ export type AdoThreadComment = {
 export type AdoCreateThreadRequest = {
   comments: AdoThreadComment[];
   status: number;
-  threadContext: AdoThreadContext;
+  threadContext?: AdoThreadContext;
 };

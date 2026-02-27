@@ -1,6 +1,6 @@
 import { request } from "undici";
 import type { Dispatcher } from "undici";
-import type { LLMClient, LLMCompleteJSONArgs } from "../types";
+import type { LLMClient, LLMCompleteJSONArgs, LLMCompleteVisionJSONArgs } from "../types";
 
 type AzureOpenAIProviderOptions = {
   endpoint: string;
@@ -46,6 +46,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export class AzureOpenAIProvider implements LLMClient {
   readonly providerName = "azure_openai";
+  readonly supportsVision = false;
   private readonly endpoint: string;
   private readonly apiKey: string;
   private readonly opts: AzureOpenAIProviderOptions;
@@ -56,6 +57,14 @@ export class AzureOpenAIProvider implements LLMClient {
     this.opts = opts;
     this.endpoint = opts.endpoint.replace(/\/+$/, "");
     this.apiKey = opts.apiKey;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async completeVisionJSON<T>(_args: LLMCompleteVisionJSONArgs<T>): Promise<T> {
+    throw new AzureOpenAIProviderError(
+      "Azure OpenAI does not support vision. Use anthropic or openai for LLM4.",
+      {}
+    );
   }
 
   async completeJSON<T>(args: LLMCompleteJSONArgs<T>): Promise<T> {

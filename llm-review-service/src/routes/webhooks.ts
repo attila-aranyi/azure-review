@@ -73,13 +73,15 @@ export const registerWebhookRoutes: FastifyPluginAsync<{ config: Config; queue: 
         return reply.code(400).send({ ok: false });
       }
 
+      const previewUrl = (body as Record<string, unknown>).previewUrl as string | undefined;
+
       if (opts.queue.enabled) {
-        await opts.queue.enqueue({ repoId, prId, requestId: request.id });
+        await opts.queue.enqueue({ repoId, prId, requestId: request.id, previewUrl });
       } else {
         const timeoutMs = 120_000;
         setImmediate(() => {
           void Promise.race([
-            runReview({ config: opts.config, repoId, prId, requestId: request.id, auditStore: opts.auditStore }),
+            runReview({ config: opts.config, repoId, prId, requestId: request.id, auditStore: opts.auditStore, previewUrl }),
             new Promise<void>((_, reject) =>
               setTimeout(() => reject(new Error("review timeout")), timeoutMs)
             )

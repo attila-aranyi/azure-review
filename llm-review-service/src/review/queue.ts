@@ -9,6 +9,7 @@ export type ReviewJobPayload = {
   repoId: string;
   prId: number;
   requestId?: string;
+  previewUrl?: string;
 };
 
 export type ReviewQueue = {
@@ -35,7 +36,7 @@ export function createReviewQueue(config: Config, auditStore?: AuditStore): Revi
   const worker = new Worker<ReviewJobPayload>(
     "llm-review",
     async (job) => {
-      await runReview({ config, repoId: job.data.repoId, prId: job.data.prId, requestId: job.data.requestId, auditStore });
+      await runReview({ config, repoId: job.data.repoId, prId: job.data.prId, requestId: job.data.requestId, auditStore, previewUrl: job.data.previewUrl });
     },
     { connection, concurrency: 1 }
   );

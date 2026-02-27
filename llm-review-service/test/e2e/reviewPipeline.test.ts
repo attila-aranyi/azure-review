@@ -228,6 +228,71 @@ describe("E2E review pipeline", () => {
     expect(hasA11yFinding).toBe(true);
   });
 
+  it("REVIEW_MIN_SEVERITY=critical filters out medium findings", async () => {
+    await app.close();
+
+    const filteredConfig = {
+      ...makeConfig(),
+      REVIEW_MIN_SEVERITY: "critical" as const,
+    } as Config;
+
+    threadPostCalls = [];
+    mockRequest.mockReset();
+    mockRequest.mockImplementation(async (url: string | URL, opts?: unknown) => {
+      const urlStr = typeof url === "string" ? url : url.toString();
+      const method = (opts as { method?: string })?.method ?? "GET";
+
+      if (urlStr.includes("/pullRequests/44") && !urlStr.includes("/iterations") && !urlStr.includes("/threads")) {
+        return mockResponse(200, {
+          pullRequestId: 44,
+          lastMergeSourceCommit: { commitId: "source-filter" },
+          lastMergeTargetCommit: { commitId: "target-filter" }
+        });
+      }
+      if (urlStr.includes("/pullRequests/44/iterations") && !urlStr.includes("/changes")) {
+        return mockResponse(200, { value: [{ id: 1 }] });
+      }
+      if (urlStr.includes("/iterations/1/changes")) {
+        return mockResponse(200, {
+          changeEntries: [{ item: { path: "/src/greet.ts" } }]
+        });
+      }
+      if (urlStr.includes("/items") && urlStr.includes("target-filter")) {
+        return mockResponse(200, beforeContent);
+      }
+      if (urlStr.includes("/items") && urlStr.includes("source-filter")) {
+        return mockResponse(200, afterContent);
+      }
+      if (urlStr.includes("/threads") && method === "POST") {
+        const body = (opts as { body?: string })?.body;
+        threadPostCalls.push(body ? JSON.parse(body) : null);
+        return mockResponse(200, { id: threadPostCalls.length });
+      }
+      return mockResponse(404, "Not found");
+    });
+
+    app = await buildApp({ config: filteredConfig });
+    await app.ready();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/webhooks/azure-devops/pr",
+      headers: { "x-webhook-secret": "e2e-secret" },
+      payload: {
+        resource: {
+          pullRequestId: 44,
+          repository: { id: "c3d4e5f6-a7b8-9012-cdef-123456789012" }
+        }
+      }
+    });
+
+    expect(res.statusCode).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // The mock provider produces "medium" severity for TODO — should be filtered out
+    expect(threadPostCalls).toHaveLength(0);
+  });
+
   it("health endpoints work alongside webhook routes", async () => {
     const healthRes = await app.inject({ method: "GET", url: "/health" });
     expect(healthRes.statusCode).toBe(200);

@@ -1,6 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { accessibilityOutputSchema, runAccessibilityCheck } from "../src/llm/accessibilityChecker";
 import { MockLLMProvider } from "../src/llm/providers/mockProvider";
+import { getAccessibilitySystemPrompt } from "../src/llm/prompts/accessibilityPrompt";
 
 describe("accessibilityOutputSchema", () => {
   it("parses defaults for missing arrays", () => {
@@ -99,5 +100,72 @@ describe("runAccessibilityCheck", () => {
       expect(finding.issueType).toBe("accessibility");
       expect(finding.filePath).toBe("/src/page.html");
     }
+  });
+});
+
+describe("getAccessibilitySystemPrompt", () => {
+  it("balanced returns base prompt without addon", () => {
+    const prompt = getAccessibilitySystemPrompt("balanced");
+    expect(prompt).toContain("WCAG 2.1 accessibility auditor");
+    expect(prompt).not.toContain("Level A violations");
+    expect(prompt).not.toContain("Level A, AA, and AAA");
+  });
+
+  it("relaxed appends Level A focus", () => {
+    const prompt = getAccessibilitySystemPrompt("relaxed");
+    expect(prompt).toContain("WCAG 2.1 accessibility auditor");
+    expect(prompt).toContain("Level A violations");
+  });
+
+  it("strict appends AA and AAA", () => {
+    const prompt = getAccessibilitySystemPrompt("strict");
+    expect(prompt).toContain("WCAG 2.1 accessibility auditor");
+    expect(prompt).toContain("Level A, AA, and AAA");
+  });
+});
+
+describe("runAccessibilityCheck strictness", () => {
+  it("passes strictness to completeJSON system prompt", async () => {
+    const client = new MockLLMProvider();
+    const spy = vi.spyOn(client, "completeJSON");
+
+    await runAccessibilityCheck({
+      client,
+      input: {
+        filePath: "/src/app.tsx",
+        hunkStartLine: 1,
+        hunkEndLine: 10,
+        hunkText: '<img src="photo.jpg">',
+        localContext: ""
+      },
+      strictness: "strict",
+      timeoutMs: 5000
+    });
+
+    expect(spy).toHaveBeenCalledOnce();
+    const callArgs = spy.mock.calls[0][0];
+    expect(callArgs.system).toContain("Level A, AA, and AAA");
+  });
+
+  it("defaults to balanced when strictness is omitted", async () => {
+    const client = new MockLLMProvider();
+    const spy = vi.spyOn(client, "completeJSON");
+
+    await runAccessibilityCheck({
+      client,
+      input: {
+        filePath: "/src/app.tsx",
+        hunkStartLine: 1,
+        hunkEndLine: 10,
+        hunkText: '<img src="photo.jpg">',
+        localContext: ""
+      },
+      timeoutMs: 5000
+    });
+
+    expect(spy).toHaveBeenCalledOnce();
+    const callArgs = spy.mock.calls[0][0];
+    expect(callArgs.system).not.toContain("Level A violations");
+    expect(callArgs.system).not.toContain("Level A, AA, and AAA");
   });
 });
