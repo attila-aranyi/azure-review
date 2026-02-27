@@ -67,45 +67,47 @@ export async function captureScreenshots(args: {
       viewport: { width: options.viewportWidth, height: options.viewportHeight },
     });
 
-    for (const pagePath of pagePaths) {
-      const pageUrl = new URL(pagePath, baseUrl).href;
-      let page: Awaited<ReturnType<typeof context.newPage>> | undefined;
-      try {
-        page = await context.newPage();
-        await page.goto(pageUrl, {
-          waitUntil: "networkidle",
-          timeout: options.timeoutMs,
-        });
+    try {
+      for (const pagePath of pagePaths) {
+        const pageUrl = new URL(pagePath, baseUrl).href;
+        let page: Awaited<ReturnType<typeof context.newPage>> | undefined;
+        try {
+          page = await context.newPage();
+          await page.goto(pageUrl, {
+            waitUntil: "networkidle",
+            timeout: options.timeoutMs,
+          });
 
-        if (options.waitMs > 0) {
-          await page.waitForTimeout(options.waitMs);
+          if (options.waitMs > 0) {
+            await page.waitForTimeout(options.waitMs);
+          }
+
+          const buffer = await page.screenshot({ fullPage: true, type: "png" });
+          const base64Data = buffer.toString("base64");
+
+          if (base64Data.length > MAX_BASE64_LENGTH) {
+            logger?.warn({ pageUrl, base64Length: base64Data.length }, "Screenshot too large, skipping");
+            continue;
+          }
+
+          const viewportSize = page.viewportSize();
+          screenshots.push({
+            pageUrl,
+            base64Data,
+            mediaType: "image/png",
+            widthPx: viewportSize?.width ?? options.viewportWidth,
+            heightPx: viewportSize?.height ?? options.viewportHeight,
+            capturedAt: new Date().toISOString(),
+          });
+        } catch (err) {
+          logger?.warn({ pageUrl, err }, "Failed to capture screenshot for page");
+        } finally {
+          await page?.close();
         }
-
-        const buffer = await page.screenshot({ fullPage: true, type: "png" });
-        const base64Data = buffer.toString("base64");
-
-        if (base64Data.length > MAX_BASE64_LENGTH) {
-          logger?.warn({ pageUrl, base64Length: base64Data.length }, "Screenshot too large, skipping");
-          continue;
-        }
-
-        const viewportSize = page.viewportSize();
-        screenshots.push({
-          pageUrl,
-          base64Data,
-          mediaType: "image/png",
-          widthPx: viewportSize?.width ?? options.viewportWidth,
-          heightPx: viewportSize?.height ?? options.viewportHeight,
-          capturedAt: new Date().toISOString(),
-        });
-      } catch (err) {
-        logger?.warn({ pageUrl, err }, "Failed to capture screenshot for page");
-      } finally {
-        await page?.close();
       }
+    } finally {
+      await context.close();
     }
-
-    await context.close();
   } finally {
     await browser.close();
   }
