@@ -66,9 +66,13 @@ const afterContent = `function greet(name: string) {
 describe("E2E review pipeline", () => {
   let app: FastifyInstance;
   let threadPostCalls: unknown[];
+  let statusPostCalls: unknown[];
+  let commentPatchCalls: Array<{ url: string; body: unknown }>;
 
   beforeEach(async () => {
     threadPostCalls = [];
+    statusPostCalls = [];
+    commentPatchCalls = [];
     mockRequest.mockReset();
 
     // Setup mock ADO responses
@@ -77,12 +81,26 @@ describe("E2E review pipeline", () => {
       const method = (opts as { method?: string })?.method ?? "GET";
 
       // getPullRequest
-      if (urlStr.includes("/pullRequests/42") && !urlStr.includes("/iterations") && !urlStr.includes("/threads")) {
+      if (urlStr.includes("/pullRequests/42") && !urlStr.includes("/iterations") && !urlStr.includes("/threads") && !urlStr.includes("/statuses")) {
         return mockResponse(200, {
           pullRequestId: 42,
           lastMergeSourceCommit: { commitId: "source-abc" },
           lastMergeTargetCommit: { commitId: "target-def" }
         });
+      }
+
+      // createPullRequestStatus
+      if (urlStr.includes("/statuses") && method === "POST") {
+        const body = (opts as { body?: string })?.body;
+        statusPostCalls.push(body ? JSON.parse(body) : null);
+        return mockResponse(200, { id: statusPostCalls.length });
+      }
+
+      // updateThreadComment (PATCH)
+      if (urlStr.includes("/comments/") && method === "PATCH") {
+        const body = (opts as { body?: string })?.body;
+        commentPatchCalls.push({ url: urlStr, body: body ? JSON.parse(body) : null });
+        return mockResponse(200, { id: 1 });
       }
 
       // listPullRequestChanges — iterations list
@@ -111,7 +129,10 @@ describe("E2E review pipeline", () => {
       if (urlStr.includes("/threads") && method === "POST") {
         const body = (opts as { body?: string })?.body;
         threadPostCalls.push(body ? JSON.parse(body) : null);
-        return mockResponse(200, { id: threadPostCalls.length });
+        return mockResponse(200, {
+          id: threadPostCalls.length,
+          comments: [{ id: 1, content: "test", commentType: 1 }],
+        });
       }
 
       return mockResponse(404, "Not found");
@@ -145,9 +166,24 @@ describe("E2E review pipeline", () => {
     await new Promise((resolve) => setTimeout(resolve, 500));
 
     // The mock provider should detect "TODO" and post a finding
-    expect(threadPostCalls.length).toBeGreaterThan(0);
-    const thread = threadPostCalls[0] as { comments?: Array<{ content?: string }> };
-    expect(thread.comments?.[0]?.content).toContain("Severity");
+    // First thread is the summary, subsequent ones are findings
+    expect(threadPostCalls.length).toBeGreaterThanOrEqual(2);
+    const summaryThread = threadPostCalls[0] as { comments?: Array<{ content?: string }> };
+    expect(summaryThread.comments?.[0]?.content).toContain("Marvin The Paranoid Android");
+    expect(summaryThread.comments?.[0]?.content).toContain("Reviewing...");
+
+    const findingThread = threadPostCalls[1] as { comments?: Array<{ content?: string }> };
+    expect(findingThread.comments?.[0]?.content).toContain("Severity");
+
+    // Status should have been posted twice: pending + succeeded
+    expect(statusPostCalls).toHaveLength(2);
+    expect((statusPostCalls[0] as { state: string }).state).toBe("pending");
+    expect((statusPostCalls[1] as { state: string }).state).toBe("succeeded");
+
+    // Summary comment should have been patched with completed content
+    expect(commentPatchCalls).toHaveLength(1);
+    expect((commentPatchCalls[0].body as { content: string }).content).toContain("Marvin The Paranoid Android");
+    expect((commentPatchCalls[0].body as { content: string }).content).toContain("published");
   });
 
   it("LLM3 accessibility findings are posted for HTML files", async () => {
@@ -165,17 +201,29 @@ describe("E2E review pipeline", () => {
     const htmlAfter = '<div><img src="photo.jpg"></div>';
 
     threadPostCalls = [];
+    statusPostCalls = [];
+    commentPatchCalls = [];
     mockRequest.mockReset();
     mockRequest.mockImplementation(async (url: string | URL, opts?: unknown) => {
       const urlStr = typeof url === "string" ? url : url.toString();
       const method = (opts as { method?: string })?.method ?? "GET";
 
-      if (urlStr.includes("/pullRequests/43") && !urlStr.includes("/iterations") && !urlStr.includes("/threads")) {
+      if (urlStr.includes("/pullRequests/43") && !urlStr.includes("/iterations") && !urlStr.includes("/threads") && !urlStr.includes("/statuses")) {
         return mockResponse(200, {
           pullRequestId: 43,
           lastMergeSourceCommit: { commitId: "src-a11y" },
           lastMergeTargetCommit: { commitId: "tgt-a11y" }
         });
+      }
+      if (urlStr.includes("/statuses") && method === "POST") {
+        const body = (opts as { body?: string })?.body;
+        statusPostCalls.push(body ? JSON.parse(body) : null);
+        return mockResponse(200, { id: statusPostCalls.length });
+      }
+      if (urlStr.includes("/comments/") && method === "PATCH") {
+        const body = (opts as { body?: string })?.body;
+        commentPatchCalls.push({ url: urlStr, body: body ? JSON.parse(body) : null });
+        return mockResponse(200, { id: 1 });
       }
       if (urlStr.includes("/pullRequests/43/iterations") && !urlStr.includes("/changes")) {
         return mockResponse(200, { value: [{ id: 1 }] });
@@ -194,7 +242,10 @@ describe("E2E review pipeline", () => {
       if (urlStr.includes("/threads") && method === "POST") {
         const body = (opts as { body?: string })?.body;
         threadPostCalls.push(body ? JSON.parse(body) : null);
-        return mockResponse(200, { id: threadPostCalls.length });
+        return mockResponse(200, {
+          id: threadPostCalls.length,
+          comments: [{ id: 1, content: "test", commentType: 1 }],
+        });
       }
       return mockResponse(404, "Not found");
     });
@@ -219,8 +270,9 @@ describe("E2E review pipeline", () => {
     await new Promise((resolve) => setTimeout(resolve, 500));
 
     // Should have at least one accessibility finding (missing alt on img)
-    expect(threadPostCalls.length).toBeGreaterThan(0);
-    const hasA11yFinding = threadPostCalls.some((call) => {
+    // First thread is summary, rest are findings
+    expect(threadPostCalls.length).toBeGreaterThan(1);
+    const hasA11yFinding = threadPostCalls.slice(1).some((call) => {
       const thread = call as { comments?: Array<{ content?: string }> };
       return thread.comments?.[0]?.content?.includes("accessibility") ||
              thread.comments?.[0]?.content?.includes("alt");
@@ -237,17 +289,29 @@ describe("E2E review pipeline", () => {
     } as Config;
 
     threadPostCalls = [];
+    statusPostCalls = [];
+    commentPatchCalls = [];
     mockRequest.mockReset();
     mockRequest.mockImplementation(async (url: string | URL, opts?: unknown) => {
       const urlStr = typeof url === "string" ? url : url.toString();
       const method = (opts as { method?: string })?.method ?? "GET";
 
-      if (urlStr.includes("/pullRequests/44") && !urlStr.includes("/iterations") && !urlStr.includes("/threads")) {
+      if (urlStr.includes("/pullRequests/44") && !urlStr.includes("/iterations") && !urlStr.includes("/threads") && !urlStr.includes("/statuses")) {
         return mockResponse(200, {
           pullRequestId: 44,
           lastMergeSourceCommit: { commitId: "source-filter" },
           lastMergeTargetCommit: { commitId: "target-filter" }
         });
+      }
+      if (urlStr.includes("/statuses") && method === "POST") {
+        const body = (opts as { body?: string })?.body;
+        statusPostCalls.push(body ? JSON.parse(body) : null);
+        return mockResponse(200, { id: statusPostCalls.length });
+      }
+      if (urlStr.includes("/comments/") && method === "PATCH") {
+        const body = (opts as { body?: string })?.body;
+        commentPatchCalls.push({ url: urlStr, body: body ? JSON.parse(body) : null });
+        return mockResponse(200, { id: 1 });
       }
       if (urlStr.includes("/pullRequests/44/iterations") && !urlStr.includes("/changes")) {
         return mockResponse(200, { value: [{ id: 1 }] });
@@ -266,7 +330,10 @@ describe("E2E review pipeline", () => {
       if (urlStr.includes("/threads") && method === "POST") {
         const body = (opts as { body?: string })?.body;
         threadPostCalls.push(body ? JSON.parse(body) : null);
-        return mockResponse(200, { id: threadPostCalls.length });
+        return mockResponse(200, {
+          id: threadPostCalls.length,
+          comments: [{ id: 1, content: "test", commentType: 1 }],
+        });
       }
       return mockResponse(404, "Not found");
     });
@@ -290,7 +357,10 @@ describe("E2E review pipeline", () => {
     await new Promise((resolve) => setTimeout(resolve, 500));
 
     // The mock provider produces "medium" severity for TODO — should be filtered out
-    expect(threadPostCalls).toHaveLength(0);
+    // Only the summary thread should be posted (no finding threads)
+    expect(threadPostCalls).toHaveLength(1);
+    const summaryThread = threadPostCalls[0] as { comments?: Array<{ content?: string }> };
+    expect(summaryThread.comments?.[0]?.content).toContain("Reviewing...");
   });
 
   it("health endpoints work alongside webhook routes", async () => {

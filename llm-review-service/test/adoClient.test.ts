@@ -232,20 +232,92 @@ describe("AdoClient", () => {
   });
 
   describe("createPullRequestThread", () => {
-    it("posts thread successfully", async () => {
+    it("posts thread and returns response with IDs", async () => {
+      const threadResponse = {
+        id: 77,
+        comments: [{ id: 1, content: "test", commentType: 1 }],
+      };
+      mockRequest.mockResolvedValueOnce(mockResponse(200, threadResponse));
+
+      const result = await client.createPullRequestThread(VALID_REPO_ID, 42, {
+        status: 1,
+        comments: [{ parentCommentId: 0, commentType: 1, content: "test" }],
+        threadContext: {
+          filePath: "/src/app.ts",
+          rightFileStart: { line: 1, offset: 1 },
+          rightFileEnd: { line: 5, offset: 1 }
+        }
+      });
+      expect(result).toEqual(threadResponse);
+      expect(result.id).toBe(77);
+      expect(result.comments[0].id).toBe(1);
+    });
+  });
+
+  describe("createPullRequestStatus", () => {
+    it("posts status successfully", async () => {
       mockRequest.mockResolvedValueOnce(mockResponse(200, { id: 1 }));
 
       await expect(
-        client.createPullRequestThread(VALID_REPO_ID, 42, {
-          status: 1,
-          comments: [{ parentCommentId: 0, commentType: 1, content: "test" }],
-          threadContext: {
-            filePath: "/src/app.ts",
-            rightFileStart: { line: 1, offset: 1 },
-            rightFileEnd: { line: 5, offset: 1 }
-          }
+        client.createPullRequestStatus(VALID_REPO_ID, 42, {
+          state: "pending",
+          description: "Reviewing...",
+          context: { name: "marvin-code-review", genre: "llm-review" },
         })
       ).resolves.not.toThrow();
+
+      const [url] = mockRequest.mock.calls[0];
+      expect(url).toContain(`/pullRequests/42/statuses`);
+    });
+
+    it("throws AdoClientError on invalid repoId", async () => {
+      await expect(
+        client.createPullRequestStatus("not-a-guid", 42, {
+          state: "pending",
+          description: "Reviewing...",
+          context: { name: "marvin-code-review", genre: "llm-review" },
+        })
+      ).rejects.toThrow(AdoClientError);
+    });
+
+    it("throws AdoClientError on server error", async () => {
+      mockRequest.mockResolvedValueOnce(mockResponse(500, "Internal Server Error"));
+
+      await expect(
+        client.createPullRequestStatus(VALID_REPO_ID, 42, {
+          state: "succeeded",
+          description: "Done",
+          context: { name: "marvin-code-review", genre: "llm-review" },
+        })
+      ).rejects.toThrow(AdoClientError);
+    });
+  });
+
+  describe("updateThreadComment", () => {
+    it("patches comment successfully", async () => {
+      mockRequest.mockResolvedValueOnce(mockResponse(200, { id: 1 }));
+
+      await expect(
+        client.updateThreadComment(VALID_REPO_ID, 42, 77, 1, { content: "Updated content" })
+      ).resolves.not.toThrow();
+
+      const [url, opts] = mockRequest.mock.calls[0];
+      expect(url).toContain(`/threads/77/comments/1`);
+      expect((opts as { method: string }).method).toBe("PATCH");
+    });
+
+    it("throws AdoClientError on invalid repoId", async () => {
+      await expect(
+        client.updateThreadComment("not-a-guid", 42, 77, 1, { content: "test" })
+      ).rejects.toThrow(AdoClientError);
+    });
+
+    it("throws AdoClientError on server error", async () => {
+      mockRequest.mockResolvedValueOnce(mockResponse(500, "Internal Server Error"));
+
+      await expect(
+        client.updateThreadComment(VALID_REPO_ID, 42, 77, 1, { content: "test" })
+      ).rejects.toThrow(AdoClientError);
     });
   });
 });

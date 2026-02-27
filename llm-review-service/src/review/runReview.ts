@@ -3,7 +3,8 @@ import path from "node:path";
 import type { Config } from "../config";
 import { AdoClient } from "../azure/adoClient";
 import type { AdoPullRequest } from "../azure/adoTypes";
-import { findingToAdoThread, visualFindingToAdoThread } from "../azure/threadBuilder";
+import { findingToAdoThread, visualFindingToAdoThread, buildStartingSummary, buildCompletedSummaryContent, buildErrorSummaryContent, buildStatusDescription } from "../azure/threadBuilder";
+import type { FindingSummaryStats } from "../azure/threadBuilder";
 import { createLLMClient } from "../llm/types";
 import type { Finding } from "../llm/types";
 import { runPreprocessor } from "../llm/preprocessor";
@@ -19,6 +20,15 @@ import { createFileIdempotencyStore, createInMemoryIdempotencyStore } from "./id
 import { limitsFromConfig } from "./limits";
 import { filterFindings } from "./severity";
 import type { AuditStore, AuditRecord, AuditFinding, AuditHunkResult } from "./audit";
+
+async function safeAdoCall<T>(fn: () => Promise<T>, logger: ReturnType<typeof createLogger>, label: string): Promise<T | undefined> {
+  try {
+    return await fn();
+  } catch (err) {
+    logger.warn({ err, label }, "Non-critical ADO call failed");
+    return undefined;
+  }
+}
 
 export async function runReview(_args: {
   config: Config;
@@ -60,6 +70,27 @@ export async function runReview(_args: {
   let pr: AdoPullRequest | undefined;
   let changedFilePaths: string[] = [];
   let hunks: DiffHunk[] = [];
+
+  // ── Post initial status + summary comment ──
+  const statusContext = { name: "marvin-code-review", genre: "llm-review" };
+
+  await safeAdoCall(
+    () => ado.createPullRequestStatus(repoId, prId, {
+      state: "pending",
+      description: buildStatusDescription("pending"),
+      context: statusContext,
+    }),
+    logger,
+    "post-pending-status"
+  );
+
+  const summaryThread = await safeAdoCall(
+    () => ado.createPullRequestThread(repoId, prId, buildStartingSummary()),
+    logger,
+    "post-summary-thread"
+  );
+  const summaryThreadId = summaryThread?.id;
+  const summaryCommentId = summaryThread?.comments?.[0]?.id;
 
   try {
     logger.info("Review start");
@@ -352,9 +383,65 @@ export async function runReview(_args: {
         });
       }
     }
+
+    // ── Update summary + status on success ──
+    const summaryStats: FindingSummaryStats = {
+      totalFindings: auditFindings.length,
+      publishedFindings: auditFindings.filter((f) => f.status === "posted").length,
+      skippedDuplicates: auditFindings.filter((f) => f.status === "skipped_duplicate").length,
+      filteredBelowMinSeverity: auditFindings.filter((f) => f.status === "filtered").length,
+      bySeverity: {},
+      byIssueType: {},
+    };
+    for (const f of auditFindings.filter((f) => f.status === "posted")) {
+      summaryStats.bySeverity[f.severity] = (summaryStats.bySeverity[f.severity] ?? 0) + 1;
+      summaryStats.byIssueType[f.issueType] = (summaryStats.byIssueType[f.issueType] ?? 0) + 1;
+    }
+
+    if (summaryThreadId != null && summaryCommentId != null) {
+      await safeAdoCall(
+        () => ado.updateThreadComment(repoId, prId, summaryThreadId, summaryCommentId, {
+          content: buildCompletedSummaryContent(summaryStats),
+        }),
+        logger,
+        "update-summary-completed"
+      );
+    }
+
+    await safeAdoCall(
+      () => ado.createPullRequestStatus(repoId, prId, {
+        state: "succeeded",
+        description: buildStatusDescription("succeeded", summaryStats.publishedFindings),
+        context: statusContext,
+      }),
+      logger,
+      "post-succeeded-status"
+    );
   } catch (err) {
     reviewStatus = "failure";
     reviewError = err instanceof Error ? err.message : String(err);
+
+    // ── Update summary + status on error ──
+    if (summaryThreadId != null && summaryCommentId != null) {
+      await safeAdoCall(
+        () => ado.updateThreadComment(repoId, prId, summaryThreadId!, summaryCommentId!, {
+          content: buildErrorSummaryContent(reviewError),
+        }),
+        logger,
+        "update-summary-error"
+      );
+    }
+
+    await safeAdoCall(
+      () => ado.createPullRequestStatus(repoId, prId, {
+        state: "failed",
+        description: buildStatusDescription("failed"),
+        context: statusContext,
+      }),
+      logger,
+      "post-failed-status"
+    );
+
     throw err;
   } finally {
     auditTimings.totalMs = Date.now() - reviewStartMs;
