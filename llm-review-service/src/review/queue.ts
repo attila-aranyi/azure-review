@@ -3,11 +3,13 @@ import { Queue, Worker } from "bullmq";
 import type { Config } from "../config";
 import { createLogger } from "../logger";
 import { runReview } from "./runReview";
+import type { AuditStore } from "./audit";
 
 export type ReviewJobPayload = {
   repoId: string;
   prId: number;
   requestId?: string;
+  previewUrl?: string;
 };
 
 export type ReviewQueue = {
@@ -17,7 +19,7 @@ export type ReviewQueue = {
   close(): Promise<void>;
 };
 
-export function createReviewQueue(config: Config): ReviewQueue {
+export function createReviewQueue(config: Config, auditStore?: AuditStore): ReviewQueue {
   if (!config.REDIS_URL) {
     return {
       enabled: false,
@@ -34,7 +36,7 @@ export function createReviewQueue(config: Config): ReviewQueue {
   const worker = new Worker<ReviewJobPayload>(
     "llm-review",
     async (job) => {
-      await runReview({ config, repoId: job.data.repoId, prId: job.data.prId, requestId: job.data.requestId });
+      await runReview({ config, repoId: job.data.repoId, prId: job.data.prId, requestId: job.data.requestId, auditStore, previewUrl: job.data.previewUrl });
     },
     { connection, concurrency: 1 }
   );

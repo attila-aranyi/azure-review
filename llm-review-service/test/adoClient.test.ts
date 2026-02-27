@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as undici from "undici";
 import { AdoClient, AdoClientError } from "../src/azure/adoClient";
 import type { Config } from "../src/config";
+import type { Logger } from "pino";
 
 vi.mock("undici", async () => {
   const actual = await vi.importActual<typeof undici>("undici");
@@ -189,6 +190,44 @@ describe("AdoClient", () => {
           versionType: "commit"
         })
       ).rejects.toThrow(AdoClientError);
+    });
+  });
+
+  describe("debug logging", () => {
+    it("logs response status at debug level for requestJson", async () => {
+      const debugFn = vi.fn();
+      const mockLogger = { debug: debugFn } as unknown as Logger;
+      const logClient = new AdoClient(makeConfig(), mockLogger);
+
+      mockRequest.mockResolvedValueOnce(mockResponse(200, { pullRequestId: 42 }));
+      await logClient.getPullRequest(VALID_REPO_ID, 42);
+
+      expect(debugFn).toHaveBeenCalledWith(
+        expect.objectContaining({ method: "GET", statusCode: 200 }),
+        "ADO API response"
+      );
+    });
+
+    it("logs response status at debug level for requestText", async () => {
+      const debugFn = vi.fn();
+      const mockLogger = { debug: debugFn } as unknown as Logger;
+      const logClient = new AdoClient(makeConfig(), mockLogger);
+
+      mockRequest.mockResolvedValueOnce(mockResponse(200, "file contents"));
+      await logClient.getItemContent(VALID_REPO_ID, "/src/app.ts", {
+        version: "abc123",
+        versionType: "commit"
+      });
+
+      expect(debugFn).toHaveBeenCalledWith(
+        expect.objectContaining({ method: "GET", statusCode: 200 }),
+        "ADO API response"
+      );
+    });
+
+    it("works without logger (optional parameter)", async () => {
+      mockRequest.mockResolvedValueOnce(mockResponse(200, { pullRequestId: 42 }));
+      await expect(client.getPullRequest(VALID_REPO_ID, 42)).resolves.not.toThrow();
     });
   });
 

@@ -1,4 +1,4 @@
-import type { LLMClient, LLMCompleteJSONArgs } from "../types";
+import type { LLMClient, LLMCompleteJSONArgs, LLMCompleteVisionJSONArgs } from "../types";
 
 function extractBetween(haystack: string, startMarker: string, endMarker: string): string | undefined {
   const startIdx = haystack.indexOf(startMarker);
@@ -15,6 +15,28 @@ function extractLineValue(haystack: string, key: string): string | undefined {
 }
 
 export class MockLLMProvider implements LLMClient {
+  readonly providerName = "mock";
+  readonly modelName = "mock";
+  readonly supportsVision = true;
+
+  async completeVisionJSON<T>(args: LLMCompleteVisionJSONArgs<T>): Promise<T> {
+    const findings = [
+      {
+        issueType: "accessibility",
+        severity: "medium",
+        filePath: "visual-audit",
+        startLine: 0,
+        endLine: 0,
+        pageUrl: "https://preview.example.com/",
+        pageRegion: "hero section",
+        wcagCriterion: "1.4.3",
+        message: "Low contrast on primary CTA button text",
+        suggestion: "Ensure 4.5:1 contrast ratio for normal text"
+      }
+    ];
+    return args.schema.parse({ findings });
+  }
+
   async completeJSON<T>(args: LLMCompleteJSONArgs<T>): Promise<T> {
     if (args.stage === "llm1") {
       const localContext =
