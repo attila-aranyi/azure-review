@@ -6,6 +6,10 @@ import type { Config } from "../config";
 import { runReview } from "../review/runReview";
 import type { ReviewQueue } from "../review/queue";
 import type { AuditStore } from "../review/audit";
+import type { DrizzleInstance } from "../db/connection";
+import { createTenantRepo } from "../db/repos/tenantRepo";
+import { createProjectRepo } from "../db/repos/projectRepo";
+import { decrypt } from "../auth/encryption";
 
 function timingSafeEqual(a: string, b: string): boolean {
   const bufA = new Uint8Array(Buffer.from(a));
@@ -17,7 +21,52 @@ function timingSafeEqual(a: string, b: string): boolean {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
-export const registerWebhookRoutes: FastifyPluginAsync<{ config: Config; queue: ReviewQueue; auditStore?: AuditStore }> = async (
+// MED-13: Shared base payload schema (used by both legacy and multi-tenant routes)
+const basePayloadSchema = z
+  .object({
+    pullRequestId: z.number().int().positive().optional(),
+    repository: z
+      .object({
+        id: z.string().min(1),
+        project: z.object({ id: z.string().min(1) }).passthrough().optional(),
+      })
+      .passthrough()
+      .optional(),
+    resource: z
+      .object({
+        pullRequestId: z.number().int().positive(),
+        repository: z
+          .object({
+            id: z.string().min(1),
+            project: z.object({ id: z.string().min(1) }).passthrough().optional(),
+          })
+          .passthrough(),
+      })
+      .passthrough()
+      .optional(),
+    resourceContainers: z
+      .object({
+        collection: z.object({ id: z.string() }).passthrough().optional(),
+      })
+      .passthrough()
+      .optional(),
+    // HIGH-3: Validate previewUrl as proper URL
+    previewUrl: z.string().url().optional(),
+  })
+  .passthrough();
+
+// MED-20: UUID format validation for tenantId path param
+const tenantIdParamSchema = z.object({
+  tenantId: z.string().uuid(),
+});
+
+export const registerWebhookRoutes: FastifyPluginAsync<{
+  config: Config;
+  queue: ReviewQueue;
+  auditStore?: AuditStore;
+  db?: DrizzleInstance;
+  encryptionKey?: Buffer;
+}> = async (
   app,
   opts
 ) => {
@@ -36,30 +85,7 @@ export const registerWebhookRoutes: FastifyPluginAsync<{ config: Config; queue: 
         return reply.code(401).send({ ok: false });
       }
 
-      const payloadSchema = z
-        .object({
-          pullRequestId: z.number().int().positive().optional(),
-          repository: z
-            .object({
-              id: z.string().min(1)
-            })
-            .passthrough()
-            .optional(),
-          resource: z
-            .object({
-              pullRequestId: z.number().int().positive(),
-              repository: z
-                .object({
-                  id: z.string().min(1)
-                })
-                .passthrough()
-            })
-            .passthrough()
-            .optional()
-        })
-        .passthrough();
-
-      const parsed = payloadSchema.safeParse(request.body);
+      const parsed = basePayloadSchema.safeParse(request.body);
       if (!parsed.success) {
         app.log.warn({ issues: parsed.error.issues }, "Invalid webhook payload");
         return reply.code(400).send({ ok: false });
@@ -73,7 +99,7 @@ export const registerWebhookRoutes: FastifyPluginAsync<{ config: Config; queue: 
         return reply.code(400).send({ ok: false });
       }
 
-      const previewUrl = (body as Record<string, unknown>).previewUrl as string | undefined;
+      const previewUrl = body.previewUrl;
 
       if (opts.queue.enabled) {
         await opts.queue.enqueue({ repoId, prId, requestId: request.id, previewUrl });
@@ -94,4 +120,99 @@ export const registerWebhookRoutes: FastifyPluginAsync<{ config: Config; queue: 
       return reply.send({ ok: true });
     }
   );
+
+  // ── Multi-tenant webhook route ──
+  if (opts.db && opts.encryptionKey) {
+    const tenantRepo = createTenantRepo(opts.db);
+    const projectRepo = createProjectRepo(opts.db);
+
+    app.post<{ Params: { tenantId: string } }>(
+      "/webhooks/ado/:tenantId",
+      { bodyLimit: 1_048_576 },
+      async (request, reply) => {
+        // MED-20: Validate tenantId is a UUID
+        const paramsParsed = tenantIdParamSchema.safeParse(request.params);
+        if (!paramsParsed.success) {
+          return reply.code(401).send({ ok: false, error: "Unauthorized" });
+        }
+        const { tenantId } = paramsParsed.data;
+
+        // Lookup tenant
+        const tenant = await tenantRepo.findById(tenantId);
+        // MED-9: Return same 401 for not-found and inactive (anti-enumeration)
+        if (!tenant || tenant.status === "inactive") {
+          return reply.code(401).send({ ok: false, error: "Unauthorized" });
+        }
+
+        // Parse webhook secret from Basic Auth or x-webhook-secret header
+        let providedSecret: string | undefined;
+        const authHeader = request.headers.authorization;
+        if (authHeader && authHeader.startsWith("Basic ")) {
+          const decoded = Buffer.from(authHeader.slice(6), "base64").toString("utf8");
+          const colonIndex = decoded.indexOf(":");
+          providedSecret = colonIndex >= 0 ? decoded.slice(colonIndex + 1) : decoded;
+        }
+        if (!providedSecret) {
+          const headerValue = request.headers["x-webhook-secret"];
+          providedSecret = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+        }
+        if (!providedSecret) {
+          return reply.code(401).send({ ok: false, error: "Unauthorized" });
+        }
+
+        // Parse payload
+        const parsed = basePayloadSchema.safeParse(request.body);
+        if (!parsed.success) {
+          app.log.warn({ issues: parsed.error.issues }, "Invalid webhook payload");
+          return reply.code(400).send({ ok: false });
+        }
+
+        const body = parsed.data;
+        const prId = body.pullRequestId ?? body.resource?.pullRequestId;
+        const repoId = body.repository?.id ?? body.resource?.repository.id;
+        const adoProjectId = body.repository?.project?.id ?? body.resource?.repository.project?.id;
+
+        if (!prId || !repoId) {
+          app.log.warn({ bodyKeys: Object.keys(body) }, "Webhook missing PR identifiers");
+          return reply.code(400).send({ ok: false });
+        }
+
+        // Find all active project enrollments for this tenant and validate secret
+        const enrollments = await projectRepo.findByTenantId(tenantId);
+        const activeEnrollments = enrollments.filter((e) => e.status === "active");
+
+        // LOW-4: Check all enrollments without early break to avoid timing leak
+        let secretValid = false;
+        for (const enrollment of activeEnrollments) {
+          if (!enrollment.webhookSecretEnc) continue;
+          try {
+            const storedSecret = decrypt(Buffer.from(enrollment.webhookSecretEnc, "base64"), opts.encryptionKey!);
+            if (timingSafeEqual(providedSecret, storedSecret)) {
+              secretValid = true;
+              // Don't break — check all to prevent timing leak
+            }
+          } catch {
+            // skip decrypt failures
+          }
+        }
+
+        // MED-9: Same response for not-found and invalid secret
+        if (!secretValid) {
+          return reply.code(401).send({ ok: false, error: "Unauthorized" });
+        }
+
+        const previewUrl = body.previewUrl;
+
+        // CRIT-5: Multi-tenant mode requires queue
+        if (!opts.queue.enabled) {
+          app.log.error("Multi-tenant webhook requires queue (REDIS_URL)");
+          return reply.code(503).send({ ok: false, error: "Queue required for multi-tenant mode" });
+        }
+
+        await opts.queue.enqueue({ repoId, prId, requestId: request.id, previewUrl, tenantId, adoProjectId });
+
+        return reply.code(202).send({ ok: true });
+      },
+    );
+  }
 };

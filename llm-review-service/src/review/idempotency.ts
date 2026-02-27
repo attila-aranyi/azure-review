@@ -1,5 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { eq, and, sql, exists } from "drizzle-orm";
+import type { DrizzleInstance } from "../db/connection";
+import { reviews, reviewFindings } from "../db/schema";
 
 export type IdempotencyKey = {
   repoId: string;
@@ -112,5 +115,51 @@ export async function createFileIdempotencyStore(args: {
       records.push({ key: serialized, createdAt: new Date().toISOString() });
       await persist();
     }
+  };
+}
+
+/**
+ * DB-backed idempotency store. Checks review_findings table for existing
+ * findings with the same hash in the same repo/PR. Maintains an in-memory
+ * set for within-run deduplication (findings are persisted via the audit store).
+ */
+export function createDbIdempotencyStore(
+  db: DrizzleInstance,
+  opts?: { tenantId?: string },
+): IdempotencyStore {
+  const currentRunKeys = new Set<string>();
+
+  return {
+    async has(key) {
+      const serialized = serializeKey(key);
+      if (currentRunKeys.has(serialized)) return true;
+
+      // MED-12: Use EXISTS subquery instead of COUNT(*) with JOIN
+      const conditions = [
+        eq(reviewFindings.findingHash, key.findingHash),
+        eq(reviews.repoId, key.repoId),
+        eq(reviews.prId, key.prId),
+      ];
+      if (opts?.tenantId) {
+        conditions.push(eq(reviews.tenantId, opts.tenantId));
+      }
+
+      const subquery = db
+        .select({ one: sql`1` })
+        .from(reviewFindings)
+        .innerJoin(reviews, eq(reviewFindings.reviewId, reviews.id))
+        .where(and(...conditions))
+        .limit(1);
+
+      const result = await db
+        .select({ found: sql<boolean>`exists(${subquery})` })
+        .from(sql`(select 1) as _dummy`);
+
+      return Boolean(result[0]?.found);
+    },
+
+    async put(key) {
+      currentRunKeys.add(serializeKey(key));
+    },
   };
 }

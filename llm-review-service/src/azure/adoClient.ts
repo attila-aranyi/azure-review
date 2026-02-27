@@ -11,7 +11,23 @@ export type AdoVersionDescriptor = {
   versionOptions?: "none" | "previousChange" | "firstParent";
 };
 
+export type AdoAuth =
+  | { type: "oauth"; accessToken: string }
+  | { type: "pat"; token: string };
+
 const ADO_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function buildAuthHeader(auth: AdoAuth): string {
+  if (auth.type === "oauth") {
+    return `Bearer ${auth.accessToken}`;
+  }
+  return `Basic ${Buffer.from(`:${auth.token}`).toString("base64")}`;
+}
+
+function isAdoAuth(value: unknown): value is AdoAuth {
+  return typeof value === "object" && value !== null && "type" in value &&
+    ((value as AdoAuth).type === "oauth" || (value as AdoAuth).type === "pat");
+}
 
 export class AdoClientError extends Error {
   readonly name = "AdoClientError";
@@ -29,13 +45,35 @@ export class AdoClient {
   private readonly writeAuthHeader: string;
   private readonly logger?: Logger;
 
-  constructor(private readonly config: Config, logger?: Logger) {
-    this.baseUrl = `https://dev.azure.com/${this.config.ADO_ORG}/${this.config.ADO_PROJECT}/_apis/git`;
-    this.authHeader = `Basic ${Buffer.from(`:${this.config.ADO_PAT}`).toString("base64")}`;
-    this.writeAuthHeader = config.ADO_BOT_PAT
-      ? `Basic ${Buffer.from(`:${config.ADO_BOT_PAT}`).toString("base64")}`
-      : this.authHeader;
-    this.logger = logger;
+  constructor(config: Config, logger?: Logger);
+  constructor(auth: AdoAuth, orgUrl: string, project?: string, logger?: Logger);
+  constructor(
+    configOrAuth: Config | AdoAuth,
+    loggerOrOrgUrl?: Logger | string,
+    project?: string,
+    loggerArg?: Logger,
+  ) {
+    if (isAdoAuth(configOrAuth)) {
+      // New multi-tenant constructor: AdoAuth + orgUrl + optional project
+      const auth = configOrAuth;
+      const orgUrl = loggerOrOrgUrl as string;
+      const proj = project;
+      this.logger = loggerArg;
+      this.baseUrl = proj
+        ? `${orgUrl}/${proj}/_apis/git`
+        : `${orgUrl}/_apis/git`;
+      this.authHeader = buildAuthHeader(auth);
+      this.writeAuthHeader = this.authHeader;
+    } else {
+      // Legacy constructor: Config + optional Logger
+      const config = configOrAuth as Config;
+      this.logger = loggerOrOrgUrl as Logger | undefined;
+      this.baseUrl = `https://dev.azure.com/${config.ADO_ORG}/${config.ADO_PROJECT}/_apis/git`;
+      this.authHeader = `Basic ${Buffer.from(`:${config.ADO_PAT}`).toString("base64")}`;
+      this.writeAuthHeader = config.ADO_BOT_PAT
+        ? `Basic ${Buffer.from(`:${config.ADO_BOT_PAT}`).toString("base64")}`
+        : this.authHeader;
+    }
   }
 
   private assertValidRepoId(repoId: string): void {

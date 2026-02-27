@@ -3,13 +3,26 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { registerWebhookRoutes } from "./routes/webhooks";
 import { registerHealthRoutes } from "./routes/health";
+import { registerAuthRoutes } from "./routes/auth";
+import { registerApiRoutes } from "./routes/api/index";
 import { createLogger } from "./logger";
 import type { Config } from "./config";
+import type { AppConfig } from "./config/appConfig";
+import type { DrizzleInstance } from "./db/connection";
+import type { TokenManager } from "./auth/tokenManager";
 import { createReviewQueue } from "./review/queue";
 import { createFileAuditStore, createInMemoryAuditStore } from "./review/audit";
 import type { AuditStore } from "./review/audit";
+import { deriveEncryptionKey } from "./auth/encryption";
 
-export async function buildApp(args: { config: Config }) {
+export type BuildAppArgs = {
+  config: Config;
+  appConfig?: AppConfig;
+  db?: DrizzleInstance;
+  tokenManager?: TokenManager;
+};
+
+export async function buildApp(args: BuildAppArgs) {
   const logger = createLogger();
   const app = Fastify({ logger });
 
@@ -32,13 +45,47 @@ export async function buildApp(args: { config: Config }) {
     origin: corsOrigins.length > 0 ? corsOrigins : false
   });
 
-  const queue = createReviewQueue(args.config, auditStore);
+  const queue = createReviewQueue(args.config, auditStore, {
+    db: args.db,
+    appConfig: args.appConfig,
+    tokenManager: args.tokenManager,
+  });
   app.addHook("onClose", async () => {
     await queue.close();
   });
 
   await app.register(registerHealthRoutes, { queue });
-  await app.register(registerWebhookRoutes, { config: args.config, queue, auditStore });
+
+  // Build encryption key for multi-tenant webhook auth
+  let encryptionKey: Buffer | undefined;
+  if (args.appConfig?.TOKEN_ENCRYPTION_KEY) {
+    encryptionKey = deriveEncryptionKey(args.appConfig.TOKEN_ENCRYPTION_KEY);
+  }
+
+  await app.register(registerWebhookRoutes, {
+    config: args.config,
+    queue,
+    auditStore,
+    db: args.db,
+    encryptionKey,
+  });
+
+  // Multi-tenant routes (only when DB + appConfig are provided)
+  if (args.appConfig && args.db && args.tokenManager) {
+    await app.register(registerAuthRoutes, {
+      appConfig: args.appConfig,
+      db: args.db,
+      tokenManager: args.tokenManager,
+    });
+
+    await app.register(registerApiRoutes, {
+      prefix: "/api",
+      appConfig: args.appConfig,
+      db: args.db,
+      tokenManager: args.tokenManager,
+      queue,
+    });
+  }
 
   return app;
 }

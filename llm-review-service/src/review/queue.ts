@@ -1,15 +1,23 @@
 import IORedis from "ioredis";
 import { Queue, Worker } from "bullmq";
 import type { Config } from "../config";
+import type { AppConfig } from "../config/appConfig";
+import type { DrizzleInstance } from "../db/connection";
+import type { TokenManager } from "../auth/tokenManager";
 import { createLogger } from "../logger";
 import { runReview } from "./runReview";
+import { createDbAuditStore } from "./audit";
+import { createDbIdempotencyStore } from "./idempotency";
 import type { AuditStore } from "./audit";
+import { buildTenantContext } from "../context/tenantContext";
 
 export type ReviewJobPayload = {
   repoId: string;
   prId: number;
   requestId?: string;
   previewUrl?: string;
+  tenantId?: string;
+  adoProjectId?: string;
 };
 
 export type ReviewQueue = {
@@ -19,7 +27,15 @@ export type ReviewQueue = {
   close(): Promise<void>;
 };
 
-export function createReviewQueue(config: Config, auditStore?: AuditStore): ReviewQueue {
+export type ReviewQueueDeps = {
+  config: Config;
+  auditStore?: AuditStore;
+  db?: DrizzleInstance;
+  appConfig?: AppConfig;
+  tokenManager?: TokenManager;
+};
+
+export function createReviewQueue(config: Config, auditStore?: AuditStore, deps?: { db?: DrizzleInstance; appConfig?: AppConfig; tokenManager?: TokenManager }): ReviewQueue {
   if (!config.REDIS_URL) {
     return {
       enabled: false,
@@ -36,7 +52,18 @@ export function createReviewQueue(config: Config, auditStore?: AuditStore): Revi
   const worker = new Worker<ReviewJobPayload>(
     "llm-review",
     async (job) => {
-      await runReview({ config, repoId: job.data.repoId, prId: job.data.prId, requestId: job.data.requestId, auditStore, previewUrl: job.data.previewUrl });
+      const { repoId, prId, requestId, previewUrl, tenantId } = job.data;
+
+      // Multi-tenant: hydrate TenantContext when tenantId is present
+      if (tenantId && deps?.db && deps.appConfig && deps.tokenManager) {
+        const context = await buildTenantContext(tenantId, deps.db, deps.appConfig, deps.tokenManager);
+        const tenantAuditStore = createDbAuditStore(deps.db, tenantId);
+        const idempotencyStore = createDbIdempotencyStore(deps.db, { tenantId });
+        await runReview({ config, repoId, prId, requestId, auditStore: tenantAuditStore, previewUrl, context, idempotencyStore });
+      } else {
+        // Legacy single-tenant path
+        await runReview({ config, repoId, prId, requestId, auditStore, previewUrl });
+      }
     },
     { connection, concurrency: 1 }
   );

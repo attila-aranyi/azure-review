@@ -1,4 +1,4 @@
-FROM node:20-slim AS build
+FROM node:20.19-slim AS build
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -7,7 +7,7 @@ COPY src/ src/
 COPY tsconfig.json ./
 RUN npm run build
 
-FROM node:20-slim
+FROM node:20.19-slim
 
 WORKDIR /app
 RUN addgroup --system --gid 1001 appgroup && \
@@ -17,6 +17,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/dist/ dist/
+COPY --from=build /app/src/db/migrations/ src/db/migrations/
 
 USER appuser
 
