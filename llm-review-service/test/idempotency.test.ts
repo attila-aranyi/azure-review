@@ -9,7 +9,7 @@ import {
 } from "../src/review/idempotency";
 
 function makeKey(hash = "abc123"): IdempotencyKey {
-  return { repoId: "repo-1", prId: 42, iteration: "commit-xyz", findingHash: hash };
+  return { repoId: "repo-1", prId: 42, findingHash: hash };
 }
 
 describe("InMemoryIdempotencyStore", () => {
@@ -65,7 +65,7 @@ describe("FileIdempotencyStore", () => {
     const filePath = path.join(tmpDir, "idempotency.json");
     const content = JSON.parse(await fs.readFile(filePath, "utf8"));
     expect(content.records).toHaveLength(1);
-    expect(content.records[0].key).toContain("repo-1:42:commit-xyz:abc123");
+    expect(content.records[0].key).toContain("repo-1:42:abc123");
   });
 
   it("loads existing entries on creation", async () => {
@@ -74,7 +74,7 @@ describe("FileIdempotencyStore", () => {
     await fs.writeFile(
       filePath,
       JSON.stringify({
-        records: [{ key: "repo-1:42:commit-xyz:abc123", createdAt: new Date().toISOString() }]
+        records: [{ key: "repo-1:42:abc123", createdAt: new Date().toISOString() }]
       }),
       "utf8"
     );
@@ -109,12 +109,12 @@ describe("FileIdempotencyStore", () => {
     await fs.writeFile(
       filePath,
       JSON.stringify({
-        records: [{ key: "repo-1:42:commit-xyz:old-hash", createdAt: oldDate }]
+        records: [{ key: "repo-1:42:old-hash", createdAt: oldDate }]
       }),
       "utf8"
     );
 
     const store = await createFileIdempotencyStore({ dataDir: tmpDir, maxAgeDays: 30 });
-    expect(await store.has({ repoId: "repo-1", prId: 42, iteration: "commit-xyz", findingHash: "old-hash" })).toBe(false);
+    expect(await store.has({ repoId: "repo-1", prId: 42, findingHash: "old-hash" })).toBe(false);
   });
 });

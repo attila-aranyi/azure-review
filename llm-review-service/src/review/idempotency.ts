@@ -4,7 +4,6 @@ import path from "node:path";
 export type IdempotencyKey = {
   repoId: string;
   prId: number;
-  iteration?: string;
   findingHash: string;
 };
 
@@ -19,7 +18,7 @@ type StoredRecord = {
 };
 
 function serializeKey(key: IdempotencyKey) {
-  return `${key.repoId}:${key.prId}:${key.iteration ?? "na"}:${key.findingHash}`;
+  return `${key.repoId}:${key.prId}:${key.findingHash}`;
 }
 
 function pruneExpired(records: StoredRecord[], maxAgeDays: number): StoredRecord[] {

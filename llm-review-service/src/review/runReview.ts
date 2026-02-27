@@ -126,7 +126,6 @@ export async function runReview(_args: {
     const minSeverity = config.REVIEW_MIN_SEVERITY ?? "low";
     const strictness = config.REVIEW_STRICTNESS ?? "balanced";
 
-    const iteration = pr.lastMergeSourceCommit?.commitId;
     const codingStandardsText = [
       "Be precise and actionable.",
       "Prefer safe, maintainable changes.",
@@ -270,7 +269,7 @@ export async function runReview(_args: {
           "Finding detail"
         );
 
-        const key = { repoId, prId, iteration, findingHash };
+        const key = { repoId, prId, findingHash };
         const isDuplicate = await idempotency.has(key);
         if (isDuplicate) {
           skippedFindings++;
@@ -347,7 +346,7 @@ export async function runReview(_args: {
           pageUrl: finding.pageUrl ?? "",
         }));
 
-        const key = { repoId, prId, iteration, findingHash };
+        const key = { repoId, prId, findingHash };
         if (await idempotency.has(key)) {
           skippedFindings++;
           auditFindings.push({
