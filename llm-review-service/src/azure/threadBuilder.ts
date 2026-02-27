@@ -47,7 +47,7 @@ export function visualFindingToAdoThread(finding: VisualA11yFinding): AdoCreateT
     finding.pageRegion ? `**Location:** ${finding.pageRegion}` : "",
     "",
     finding.message.trim(),
-    finding.suggestion ? `\n**Suggestion:** ${finding.suggestion}` : "",
+    finding.suggestion ? `**Suggestion:** ${finding.suggestion}` : "",
   ].filter(Boolean).join("\n");
 
   return {

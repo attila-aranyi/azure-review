@@ -317,6 +317,17 @@ export async function runReview(_args: {
         const key = { repoId, prId, iteration, findingHash };
         if (await idempotency.has(key)) {
           skippedFindings++;
+          auditFindings.push({
+            issueType: finding.issueType,
+            severity: finding.severity,
+            filePath: finding.filePath,
+            startLine: finding.startLine,
+            endLine: finding.endLine,
+            message: finding.message,
+            suggestion: finding.suggestion,
+            findingHash,
+            status: "skipped_duplicate",
+          });
           continue;
         }
 
@@ -326,6 +337,19 @@ export async function runReview(_args: {
         );
         await idempotency.put(key);
         logger.info({ findingHash, postMs }, "Published visual a11y finding");
+
+        auditFindings.push({
+          issueType: finding.issueType,
+          severity: finding.severity,
+          filePath: finding.filePath,
+          startLine: finding.startLine,
+          endLine: finding.endLine,
+          message: finding.message,
+          suggestion: finding.suggestion,
+          findingHash,
+          status: "posted",
+          postMs,
+        });
       }
     }
   } catch (err) {

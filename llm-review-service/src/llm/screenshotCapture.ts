@@ -16,7 +16,9 @@ export type CapturedScreenshot = {
   capturedAt: string;
 };
 
-const MAX_BASE64_SIZE = 5 * 1024 * 1024; // 5MB
+// Base64 inflates size by ~33%, so limit the base64 string length to ~6.67M chars (≈ 5MB raw)
+const MAX_RAW_BYTES = 5 * 1024 * 1024;
+const MAX_BASE64_LENGTH = Math.ceil(MAX_RAW_BYTES * (4 / 3));
 
 async function loadPlaywright(): Promise<{
   chromium: {
@@ -67,8 +69,9 @@ export async function captureScreenshots(args: {
 
     for (const pagePath of pagePaths) {
       const pageUrl = new URL(pagePath, baseUrl).href;
+      let page: Awaited<ReturnType<typeof context.newPage>> | undefined;
       try {
-        const page = await context.newPage();
+        page = await context.newPage();
         await page.goto(pageUrl, {
           waitUntil: "networkidle",
           timeout: options.timeoutMs,
@@ -81,9 +84,8 @@ export async function captureScreenshots(args: {
         const buffer = await page.screenshot({ fullPage: true, type: "png" });
         const base64Data = buffer.toString("base64");
 
-        if (base64Data.length > MAX_BASE64_SIZE) {
-          logger?.warn({ pageUrl, sizeBytes: base64Data.length }, "Screenshot too large, skipping");
-          await page.close();
+        if (base64Data.length > MAX_BASE64_LENGTH) {
+          logger?.warn({ pageUrl, base64Length: base64Data.length }, "Screenshot too large, skipping");
           continue;
         }
 
@@ -96,10 +98,10 @@ export async function captureScreenshots(args: {
           heightPx: viewportSize?.height ?? options.viewportHeight,
           capturedAt: new Date().toISOString(),
         });
-
-        await page.close();
       } catch (err) {
         logger?.warn({ pageUrl, err }, "Failed to capture screenshot for page");
+      } finally {
+        await page?.close();
       }
     }
 

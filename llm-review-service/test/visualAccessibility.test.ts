@@ -231,7 +231,7 @@ describe("runVisualAccessibilityCheck", () => {
     });
 
     expect(result.findings).toHaveLength(0);
-    expect(result.screenshots).toHaveLength(1);
+    expect(result.screenshots).toHaveLength(0);
     expect(client.completeVisionJSON).not.toHaveBeenCalled();
   });
 

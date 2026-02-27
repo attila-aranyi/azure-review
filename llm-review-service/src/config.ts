@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { LLMProviderName, ReviewStrictness } from "./llm/types";
+import type { LLMProviderName } from "./llm/types";
 
 const optionalNonEmpty = () =>
   z.preprocess(
@@ -113,8 +113,6 @@ export type Config = z.infer<typeof envSchema> & {
   LLM2_PROVIDER: LLMProviderName;
   LLM3_PROVIDER?: LLMProviderName;
   LLM4_PROVIDER?: LLMProviderName;
-  REVIEW_MIN_SEVERITY: "low" | "medium" | "high" | "critical";
-  REVIEW_STRICTNESS: ReviewStrictness;
 };
 
 function requireProviderConfig(parsed: Config) {

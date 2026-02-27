@@ -107,8 +107,15 @@ export class AnthropicProvider implements LLMClient {
           messages: attempt === 1
             ? opts.messages
             : opts.messages.map((msg) => {
-                if (isRecord(msg) && typeof msg.content === "string") {
+                if (!isRecord(msg)) return msg;
+                if (typeof msg.content === "string") {
                   return { ...msg, content: `${msg.content}\n\nReturn ONLY valid JSON.` };
+                }
+                if (Array.isArray(msg.content)) {
+                  return {
+                    ...msg,
+                    content: [...msg.content, { type: "text", text: "\n\nReturn ONLY valid JSON." }],
+                  };
                 }
                 return msg;
               })
@@ -161,7 +168,10 @@ export class AnthropicProvider implements LLMClient {
           await sleep(250 * 2 ** (attempt - 1));
           continue;
         }
-        if (attempt < maxAttempts && !(err instanceof AnthropicProviderError)) {
+        // Retry JSON parse / extraction errors (not schema validation or provider errors)
+        const isParseError = !(err instanceof AnthropicProviderError) && err instanceof Error && err.message.includes("JSON");
+        if (attempt < maxAttempts && isParseError) {
+          await sleep(250 * 2 ** (attempt - 1));
           continue;
         }
         throw err;

@@ -47,6 +47,14 @@ export async function runVisualAccessibilityCheck(args: {
   const { client, config, previewUrl, changedFiles, logger } = args;
   const start = Date.now();
 
+  if (!client.supportsVision) {
+    logger?.warn(
+      { provider: client.providerName },
+      "LLM4 provider does not support vision — skipping visual accessibility check"
+    );
+    return { findings: [], screenshots: [], ms: Date.now() - start };
+  }
+
   const pagePaths =
     config.VISUAL_A11Y_PAGES && config.VISUAL_A11Y_PAGES.length > 0
       ? config.VISUAL_A11Y_PAGES
@@ -70,14 +78,6 @@ export async function runVisualAccessibilityCheck(args: {
   if (screenshots.length === 0) {
     logger?.warn("No screenshots captured — skipping visual accessibility check");
     return { findings: [], screenshots: [], ms: Date.now() - start };
-  }
-
-  if (!client.supportsVision) {
-    logger?.warn(
-      { provider: client.providerName },
-      "LLM4 provider does not support vision — skipping visual accessibility check"
-    );
-    return { findings: [], screenshots, ms: Date.now() - start };
   }
 
   const images: ImageInput[] = screenshots.map((s) => ({

@@ -102,7 +102,7 @@ export function createLLMClient(config: Config, stage: LLMStage): LLMClient {
       const endpoint = config.AZURE_OPENAI_ENDPOINT;
       const apiKey = config.AZURE_OPENAI_API_KEY;
       const deployment = getModelForStage(config, stage, {
-        llm1: "AZURE_OPENAI_DEPLOYMENT_LLM1", llm2: "AZURE_OPENAI_DEPLOYMENT_LLM2", llm3: "AZURE_OPENAI_DEPLOYMENT_LLM3", llm4: "AZURE_OPENAI_DEPLOYMENT_LLM3"
+        llm1: "AZURE_OPENAI_DEPLOYMENT_LLM1", llm2: "AZURE_OPENAI_DEPLOYMENT_LLM2", llm3: "AZURE_OPENAI_DEPLOYMENT_LLM3", llm4: "AZURE_OPENAI_DEPLOYMENT_LLM4"
       });
       if (!endpoint || !apiKey || !deployment) throw new Error(`Missing Azure OpenAI config for ${stage}`);
       return new AzureOpenAIProvider({ endpoint, apiKey, deployment });
