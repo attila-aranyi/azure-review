@@ -3,7 +3,7 @@ import { request } from "undici";
 import type { Dispatcher } from "undici";
 import type { Logger } from "pino";
 import type { Config } from "../config";
-import type { AdoCreateThreadRequest, AdoIterationsResponse, AdoListPullRequestChangesResponse, AdoPullRequest } from "./adoTypes";
+import type { AdoCreateThreadRequest, AdoCreateThreadResponse, AdoCreatePullRequestStatusRequest, AdoUpdateCommentRequest, AdoIterationsResponse, AdoListPullRequestChangesResponse, AdoPullRequest } from "./adoTypes";
 
 export type AdoVersionDescriptor = {
   version: string;
@@ -150,9 +150,21 @@ export class AdoClient {
     return this.requestText("GET", url);
   }
 
-  async createPullRequestThread(repoId: string, prId: number, thread: AdoCreateThreadRequest): Promise<void> {
+  async createPullRequestThread(repoId: string, prId: number, thread: AdoCreateThreadRequest): Promise<AdoCreateThreadResponse> {
     this.assertValidRepoId(repoId);
     const url = this.buildUrl(`/repositories/${repoId}/pullRequests/${prId}/threads`);
-    await this.requestJson("POST", url, thread);
+    return this.requestJson<AdoCreateThreadResponse>("POST", url, thread);
+  }
+
+  async createPullRequestStatus(repoId: string, prId: number, status: AdoCreatePullRequestStatusRequest): Promise<void> {
+    this.assertValidRepoId(repoId);
+    const url = this.buildUrl(`/repositories/${repoId}/pullRequests/${prId}/statuses`);
+    await this.requestJson("POST", url, status);
+  }
+
+  async updateThreadComment(repoId: string, prId: number, threadId: number, commentId: number, update: AdoUpdateCommentRequest): Promise<void> {
+    this.assertValidRepoId(repoId);
+    const url = this.buildUrl(`/repositories/${repoId}/pullRequests/${prId}/threads/${threadId}/comments/${commentId}`);
+    await this.requestJson("PATCH", url, update);
   }
 }

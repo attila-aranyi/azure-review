@@ -45,3 +45,17 @@ export type AdoCreateThreadRequest = {
   status: number;
   threadContext?: AdoThreadContext;
 };
+
+export type AdoCreateThreadResponse = {
+  id: number;
+  comments: Array<{ id: number; content: string; commentType: number }>;
+};
+
+export type AdoCreatePullRequestStatusRequest = {
+  state: "pending" | "succeeded" | "failed" | "error";
+  description: string;
+  targetUrl?: string;
+  context: { name: string; genre: string };
+};
+
+export type AdoUpdateCommentRequest = { content: string };
