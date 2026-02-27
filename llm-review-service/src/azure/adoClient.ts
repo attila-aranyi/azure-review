@@ -26,11 +26,15 @@ export class AdoClientError extends Error {
 export class AdoClient {
   private readonly baseUrl: string;
   private readonly authHeader: string;
+  private readonly writeAuthHeader: string;
   private readonly logger?: Logger;
 
   constructor(private readonly config: Config, logger?: Logger) {
     this.baseUrl = `https://dev.azure.com/${this.config.ADO_ORG}/${this.config.ADO_PROJECT}/_apis/git`;
     this.authHeader = `Basic ${Buffer.from(`:${this.config.ADO_PAT}`).toString("base64")}`;
+    this.writeAuthHeader = config.ADO_BOT_PAT
+      ? `Basic ${Buffer.from(`:${config.ADO_BOT_PAT}`).toString("base64")}`
+      : this.authHeader;
     this.logger = logger;
   }
 
@@ -43,12 +47,13 @@ export class AdoClient {
   private async requestJson<T>(
     method: Dispatcher.HttpMethod,
     url: string,
-    body?: unknown
+    body?: unknown,
+    authOverride?: string
   ): Promise<T> {
     const res = await request(url, {
       method,
       headers: {
-        Authorization: this.authHeader,
+        Authorization: authOverride ?? this.authHeader,
         Accept: "application/json",
         ...(body ? { "Content-Type": "application/json" } : {})
       },
@@ -153,18 +158,18 @@ export class AdoClient {
   async createPullRequestThread(repoId: string, prId: number, thread: AdoCreateThreadRequest): Promise<AdoCreateThreadResponse> {
     this.assertValidRepoId(repoId);
     const url = this.buildUrl(`/repositories/${repoId}/pullRequests/${prId}/threads`);
-    return this.requestJson<AdoCreateThreadResponse>("POST", url, thread);
+    return this.requestJson<AdoCreateThreadResponse>("POST", url, thread, this.writeAuthHeader);
   }
 
   async createPullRequestStatus(repoId: string, prId: number, status: AdoCreatePullRequestStatusRequest): Promise<void> {
     this.assertValidRepoId(repoId);
     const url = this.buildUrl(`/repositories/${repoId}/pullRequests/${prId}/statuses`);
-    await this.requestJson("POST", url, status);
+    await this.requestJson("POST", url, status, this.writeAuthHeader);
   }
 
   async updateThreadComment(repoId: string, prId: number, threadId: number, commentId: number, update: AdoUpdateCommentRequest): Promise<void> {
     this.assertValidRepoId(repoId);
     const url = this.buildUrl(`/repositories/${repoId}/pullRequests/${prId}/threads/${threadId}/comments/${commentId}`);
-    await this.requestJson("PATCH", url, update);
+    await this.requestJson("PATCH", url, update, this.writeAuthHeader);
   }
 }

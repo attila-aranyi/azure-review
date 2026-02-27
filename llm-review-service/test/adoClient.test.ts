@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as undici from "undici";
 import { AdoClient, AdoClientError } from "../src/azure/adoClient";
@@ -318,6 +319,77 @@ describe("AdoClient", () => {
       await expect(
         client.updateThreadComment(VALID_REPO_ID, 42, 77, 1, { content: "test" })
       ).rejects.toThrow(AdoClientError);
+    });
+  });
+
+  describe("ADO_BOT_PAT", () => {
+    it("uses bot PAT for write operations when configured", async () => {
+      const botConfig = { ...makeConfig(), ADO_BOT_PAT: "bot-secret-pat" } as Config;
+      const botClient = new AdoClient(botConfig);
+
+      mockRequest.mockResolvedValueOnce(mockResponse(200, {
+        id: 1,
+        comments: [{ id: 1, content: "test", commentType: 1 }],
+      }));
+
+      await botClient.createPullRequestThread(VALID_REPO_ID, 42, {
+        status: 1,
+        comments: [{ parentCommentId: 0, commentType: 1, content: "test" }],
+      });
+
+      const [, opts] = mockRequest.mock.calls[0];
+      const headers = (opts as { headers: Record<string, string> }).headers;
+      const expected = `Basic ${Buffer.from(":bot-secret-pat").toString("base64")}`;
+      expect(headers.Authorization).toBe(expected);
+    });
+
+    it("uses bot PAT for status posts when configured", async () => {
+      const botConfig = { ...makeConfig(), ADO_BOT_PAT: "bot-secret-pat" } as Config;
+      const botClient = new AdoClient(botConfig);
+
+      mockRequest.mockResolvedValueOnce(mockResponse(200, { id: 1 }));
+
+      await botClient.createPullRequestStatus(VALID_REPO_ID, 42, {
+        state: "pending",
+        description: "Reviewing...",
+        context: { name: "marvin-code-review", genre: "llm-review" },
+      });
+
+      const [, opts] = mockRequest.mock.calls[0];
+      const headers = (opts as { headers: Record<string, string> }).headers;
+      const expected = `Basic ${Buffer.from(":bot-secret-pat").toString("base64")}`;
+      expect(headers.Authorization).toBe(expected);
+    });
+
+    it("uses main PAT for read operations even when bot PAT is set", async () => {
+      const botConfig = { ...makeConfig(), ADO_BOT_PAT: "bot-secret-pat" } as Config;
+      const botClient = new AdoClient(botConfig);
+
+      mockRequest.mockResolvedValueOnce(mockResponse(200, { pullRequestId: 42 }));
+
+      await botClient.getPullRequest(VALID_REPO_ID, 42);
+
+      const [, opts] = mockRequest.mock.calls[0];
+      const headers = (opts as { headers: Record<string, string> }).headers;
+      const mainExpected = `Basic ${Buffer.from(":mypat").toString("base64")}`;
+      expect(headers.Authorization).toBe(mainExpected);
+    });
+
+    it("falls back to main PAT for writes when bot PAT is not set", async () => {
+      mockRequest.mockResolvedValueOnce(mockResponse(200, {
+        id: 1,
+        comments: [{ id: 1, content: "test", commentType: 1 }],
+      }));
+
+      await client.createPullRequestThread(VALID_REPO_ID, 42, {
+        status: 1,
+        comments: [{ parentCommentId: 0, commentType: 1, content: "test" }],
+      });
+
+      const [, opts] = mockRequest.mock.calls[0];
+      const headers = (opts as { headers: Record<string, string> }).headers;
+      const mainExpected = `Basic ${Buffer.from(":mypat").toString("base64")}`;
+      expect(headers.Authorization).toBe(mainExpected);
     });
   });
 });

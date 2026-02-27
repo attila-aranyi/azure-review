@@ -37,6 +37,7 @@ const envSchema = z
     ADO_ORG: z.string().min(1),
     ADO_PROJECT: z.string().min(1),
     ADO_PAT: z.string().min(1),
+    ADO_BOT_PAT: optionalNonEmpty(),
 
     LLM1_PROVIDER: providerEnum,
     LLM2_PROVIDER: providerEnum,
