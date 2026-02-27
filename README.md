@@ -1,670 +1,569 @@
 # llm-review-service
 
-AI-powered code review for Azure DevOps pull requests using a multi-stage LLM pipeline.
+AI-powered code review service for Azure DevOps pull requests. Uses a multi-stage LLM pipeline to analyze diffs, detect bugs, security issues, and accessibility problems, then posts findings as inline PR comments.
 
-The service receives webhook events from Azure DevOps, collects PR diffs, runs them through up to four LLM stages (context preprocessing, code review, accessibility audit, visual accessibility audit), and posts findings back as inline PR threads.
+Supports single-tenant (self-hosted) and multi-tenant (SaaS) deployment modes.
 
-## Architecture Overview
+## Table of Contents
+
+- [Architecture](#architecture)
+- [Review Pipeline](#review-pipeline)
+- [Quick Start](#quick-start)
+  - [Prerequisites](#prerequisites)
+  - [Single-Tenant (Self-Hosted)](#single-tenant-self-hosted)
+  - [Multi-Tenant (SaaS)](#multi-tenant-saas)
+  - [Docker Compose](#docker-compose)
+- [Configuration](#configuration)
+  - [Environment Variables](#environment-variables)
+  - [LLM Providers](#llm-providers)
+  - [Review Tuning](#review-tuning)
+- [API Reference](#api-reference)
+  - [Webhooks](#webhooks)
+  - [OAuth](#oauth)
+  - [Management API](#management-api)
+  - [Health](#health)
+- [Database](#database)
+  - [Schema](#schema)
+  - [Migrations](#migrations)
+- [Authentication](#authentication)
+- [Testing](#testing)
+- [Deployment](#deployment)
+  - [Docker](#docker)
+  - [Azure Container Apps](#azure-container-apps)
+- [Project Structure](#project-structure)
+- [Security](#security)
+
+---
+
+## Architecture
 
 ```
-Azure DevOps PR
-       │
-       ▼
-  POST /webhooks/azure-devops/pr
-       │
-       ├──► Collect diffs from ADO REST API
-       │
-       ├──► LLM1 — Context Preprocessor (per hunk)
-       │        Selects minimal useful context for the reviewer
-       │
-       ├──► LLM2 — Code Reviewer (per hunk)
-       │        Full code review → findings
-       │
-       ├──► LLM3 — Accessibility Checker (per hunk, optional)
-       │        WCAG 2.1 text-based audit on diff hunks
-       │
-       ├──► LLM4 — Visual Accessibility (once per review, optional)
-       │        Playwright screenshots + vision LLM → visual a11y findings
-       │
-       ├──► Severity filter + idempotency dedup
-       │
-       └──► Post findings as inline PR threads back to Azure DevOps
+                          Azure DevOps
+                              |
+                     Webhook (PR created/updated)
+                              |
+                              v
+                    ┌─────────────────────┐
+                    │   Fastify Server    │
+                    │  (webhook routes)   │
+                    └────────┬────────────┘
+                             |
+               ┌─────────────┴──────────────┐
+               |                             |
+          (REDIS_URL set)            (no REDIS_URL)
+               |                             |
+               v                             v
+        ┌──────────────┐            ┌──────────────┐
+        │   BullMQ     │            │  Synchronous  │
+        │   Worker     │            │  (in-process) │
+        └──────┬───────┘            └──────┬───────┘
+               |                           |
+               └───────────┬───────────────┘
+                           v
+                  ┌─────────────────┐
+                  │   runReview()   │
+                  │  (4-stage LLM)  │
+                  └────────┬────────┘
+                           |
+              ┌────────────┼────────────┐
+              v            v            v
+         ADO API      Audit Store   Idempotency
+        (comments)    (file/DB)      (dedup)
 ```
 
-Each stage can use a different LLM provider. LLM3 and LLM4 are independently opt-in.
+**Dual-mode operation:**
 
-## Features
+| Feature | Single-Tenant | Multi-Tenant (SaaS) |
+|---------|--------------|---------------------|
+| Config source | Environment variables | Database per tenant |
+| ADO auth | Personal Access Token | OAuth (per-tenant tokens) |
+| Webhook endpoint | `/webhooks/azure-devops/pr` | `/webhooks/ado/:tenantId` |
+| API authentication | Webhook secret only | JWT (ADO JWKS) + API key |
+| Storage | File-based or in-memory | PostgreSQL |
+| Requires DB | No | Yes |
+| Requires Redis | No (optional) | Yes (required for webhooks) |
 
-- **Multi-stage LLM pipeline** — preprocessor → reviewer → accessibility → visual accessibility
-- **Multiple LLM providers** — OpenAI, Azure OpenAI, Anthropic, or mock (for testing)
-- **Mix-and-match providers** — use a different provider/model per stage
-- **9 issue types** — bug, security, performance, style, correctness, maintainability, testing, docs, accessibility
-- **4 severity levels** — low, medium, high, critical (configurable minimum threshold)
-- **3 strictness modes** — relaxed, balanced, strict
-- **Text accessibility audit (LLM3)** — WCAG 2.1 checks on diff hunks, file extension filter
-- **Visual accessibility audit (LLM4)** — Playwright screenshots analyzed by vision LLM (10 WCAG categories)
-- **Idempotent posting** — SHA-256 finding hashes prevent duplicate PR comments
-- **Audit trail** — JSONL log of every review with timings, findings, and statuses
-- **Queue mode** — optional Redis/BullMQ for async processing with retries
-- **Rate limiting** — per-IP limits on the webhook endpoint
-- **CORS support** — configurable allowed origins
-- **Health checks** — `/health` (liveness) and `/ready` (readiness with Redis check)
-- **Docker & docker-compose** — production-ready container with Redis sidecar
-- **Azure Container Apps deployment** — infrastructure script + CI/CD pipeline
+---
 
-## Prerequisites
+## Review Pipeline
 
-**Required:**
+The service processes each PR through a four-stage LLM pipeline:
 
-- Node.js 20+
-- An Azure DevOps Personal Access Token (PAT) with **Code: Read & Write** scope
-- At least one LLM API key (OpenAI, Azure OpenAI, or Anthropic) — or use `mock` for testing
+```
+PR Webhook
+  │
+  ├─ 1. Fetch PR metadata + collect diff hunks
+  │     ├─ Apply file/hunk limits (MAX_FILES, MAX_HUNKS, MAX_TOTAL_DIFF_LINES)
+  │     └─ Filter by severity threshold (REVIEW_MIN_SEVERITY)
+  │
+  ├─ 2. For each hunk:
+  │     ├─ LLM1 (Preprocessor): Select relevant context from surrounding code
+  │     └─ LLM2 (Reviewer): Generate findings (bugs, security, style, performance)
+  │
+  ├─ 3. LLM3 (Accessibility, optional): Check HTML/JSX/CSS for WCAG violations
+  │
+  └─ 4. LLM4 (Visual Accessibility, optional): Screenshot + vision model analysis
+        │
+        v
+  Deduplicate findings (SHA-256 hash)
+  Post as inline PR comment threads
+  Update PR status (succeeded/failed)
+  Write audit record
+```
 
-**Optional:**
+**Finding types:** `bug`, `security`, `performance`, `style`, `accessibility`, `visual-accessibility`
 
-- Redis 7+ (for queue mode)
-- Playwright (`npm install playwright`) + Chromium (for LLM4 visual accessibility)
-- Docker & Docker Compose (for containerized deployment)
-- Azure CLI (for Azure Container Apps deployment)
+**Severity levels:** `critical`, `high`, `medium`, `low`
+
+**Strictness modes:**
+- `relaxed` — Only flag clear issues
+- `balanced` — Flag issues and suggest improvements (default)
+- `strict` — Flag everything including style nits
+
+---
 
 ## Quick Start
 
+### Prerequisites
+
+- Node.js >= 20 (`nvm use 20`)
+- An Azure DevOps organization with a Personal Access Token (scope: `Code (Read & Write)`)
+- An LLM provider API key (OpenAI, Anthropic, or Azure OpenAI)
+
+### Single-Tenant (Self-Hosted)
+
 ```bash
-# 1. Clone and enter the service directory
-cd llm-review-service
+# Install dependencies
+npm ci
 
-# 2. Install dependencies
-npm install
-
-# 3. Create your .env from the example
+# Copy and configure environment
 cp .env.example .env
+# Edit .env with your ADO credentials and LLM provider keys
 
-# 4. Edit .env — set at minimum:
-#    WEBHOOK_SECRET, ADO_ORG, ADO_PROJECT, ADO_PAT
-#    LLM1_PROVIDER, LLM2_PROVIDER + provider-specific keys/models
-
-# 5. Start the dev server
+# Development mode (hot reload)
 npm run dev
+
+# Production
+npm run build
+npm start
 ```
 
-Smoke test (with mock providers):
+Then configure an Azure DevOps service hook to send PR events to `POST http://<host>:3000/webhooks/azure-devops/pr` with a matching `x-webhook-secret` header.
+
+### Multi-Tenant (SaaS)
+
+Requires PostgreSQL and Redis:
 
 ```bash
-curl -X POST http://localhost:3000/webhooks/azure-devops/pr \
-  -H "content-type: application/json" \
-  -H "x-webhook-secret: <your-WEBHOOK_SECRET>" \
-  -d '{"resource":{"pullRequestId":1,"repository":{"id":"your-repo-id"}}}'
+# Copy and configure environment
+cp .env.azure.example .env
+# Edit .env — add DATABASE_URL, OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET,
+# TOKEN_ENCRYPTION_KEY, REDIS_URL
+
+# Generate a 32-byte encryption key (64 hex chars)
+openssl rand -hex 32
+
+# Run database migrations
+npm run build
+DATABASE_URL=<your-url> node dist/db/migrate.js
+
+# Start
+npm start
 ```
 
-Expected response: `{"ok":true}`
+### Docker Compose
 
-## Configuration Reference
+```bash
+# Create a .env file with at minimum:
+# POSTGRES_PASSWORD=<your-password>
+# Plus your ADO + LLM provider config
 
-All environment variables are validated at startup via Zod (`src/config.ts`). The service will refuse to start if required variables are missing.
+docker compose up -d
+```
 
-### Server & Security
+This starts the service, PostgreSQL (localhost:5432), and Redis (localhost:6379).
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `PORT` | No | `3000` | HTTP listen port |
-| `WEBHOOK_SECRET` | **Yes** | — | Shared secret checked via `x-webhook-secret` header (timing-safe comparison) |
-| `CORS_ORIGINS` | No | `""` (deny all) | Comma-separated allowed origins |
-| `RATE_LIMIT_MAX` | No | `30` | Max requests per IP per window |
-| `RATE_LIMIT_WINDOW_MS` | No | `60000` | Rate limit window in milliseconds |
+---
 
-### Azure DevOps
+## Configuration
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `ADO_ORG` | **Yes** | — | Azure DevOps organization name |
-| `ADO_PROJECT` | **Yes** | — | Azure DevOps project name |
-| `ADO_PAT` | **Yes** | — | Personal Access Token (Code: Read & Write) |
+### Environment Variables
+
+#### Server
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `3000` | HTTP server port |
+| `LOG_LEVEL` | `info` | `fatal` \| `error` \| `warn` \| `info` \| `debug` \| `trace` |
+| `CORS_ORIGINS` | (empty) | Comma-separated allowed origins (empty = deny all) |
+| `RATE_LIMIT_MAX` | `30` | Max requests per window per IP/tenant |
+| `RATE_LIMIT_WINDOW_MS` | `60000` | Rate limit window (ms) |
+
+#### Azure DevOps
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ADO_ORG` | Yes (single-tenant) | Organization slug |
+| `ADO_PROJECT` | Yes (single-tenant) | Project name |
+| `ADO_PAT` | Yes | Personal Access Token |
+| `ADO_BOT_PAT` | No | Separate PAT for posting comments |
+| `WEBHOOK_SECRET` | Yes (single-tenant) | Shared secret for webhook validation |
+
+#### LLM Providers
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM1_PROVIDER` | — | Preprocessor: `mock` \| `openai` \| `azure_openai` \| `anthropic` |
+| `LLM2_PROVIDER` | — | Reviewer: same options |
+| `LLM3_ENABLED` | `false` | Enable text accessibility checker |
+| `LLM3_PROVIDER` | — | Accessibility: same options |
+| `LLM4_ENABLED` | `false` | Enable visual accessibility (requires vision model) |
+| `LLM4_PROVIDER` | — | Visual a11y: `openai` or `anthropic` (vision required) |
+
+**Provider-specific keys:**
+
+| Provider | Variables |
+|----------|-----------|
+| OpenAI | `OPENAI_API_KEY`, `OPENAI_MODEL_LLM1`, `OPENAI_MODEL_LLM2`, `OPENAI_MODEL_LLM3`, `OPENAI_MODEL_LLM4` |
+| Azure OpenAI | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT_LLM1`, `AZURE_OPENAI_DEPLOYMENT_LLM2`, `AZURE_OPENAI_DEPLOYMENT_LLM3` |
+| Anthropic | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL_LLM1`, `ANTHROPIC_MODEL_LLM2`, `ANTHROPIC_MODEL_LLM3`, `ANTHROPIC_MODEL_LLM4` |
+
+#### Review Tuning
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAX_FILES` | `20` | Max files per PR review |
+| `MAX_TOTAL_DIFF_LINES` | `2000` | Max total diff lines |
+| `MAX_HUNKS` | `80` | Max diff hunks to process |
+| `HUNK_CONTEXT_LINES` | `20` | Lines of context around changes |
+| `TOKEN_BUDGET_LLM1` | `3000` | Preprocessor token budget |
+| `TOKEN_BUDGET_LLM2` | `6000` | Reviewer token budget |
+| `TOKEN_BUDGET_LLM3` | `4000` | Accessibility checker budget |
+| `TOKEN_BUDGET_LLM4` | `8000` | Visual accessibility budget |
+| `REVIEW_MIN_SEVERITY` | `low` | Minimum severity to report: `low` \| `medium` \| `high` \| `critical` |
+| `REVIEW_STRICTNESS` | `balanced` | Review strictness: `relaxed` \| `balanced` \| `strict` |
+| `A11Y_FILE_EXTENSIONS` | `.html,.jsx,.tsx,.vue,.svelte,.css,.scss` | File extensions for a11y checks |
+| `AUDIT_ENABLED` | `true` | Enable audit logging |
+| `AUDIT_RETENTION_DAYS` | `30` | Audit log retention period |
+
+#### Queue (Optional)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `REDIS_URL` | (empty) | Redis connection string. Empty = synchronous processing |
+
+#### Multi-Tenant Mode (SaaS)
+
+These are only required when `DATABASE_URL` is set:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DATABASE_URL` | Yes | PostgreSQL connection string |
+| `DEPLOYMENT_MODE` | No (`saas`) | `saas` \| `self-hosted` |
+| `OAUTH_CLIENT_ID` | Yes (SaaS) | Azure DevOps OAuth app ID |
+| `OAUTH_CLIENT_SECRET` | Yes (SaaS) | Azure DevOps OAuth app secret |
+| `OAUTH_REDIRECT_URI` | Yes (SaaS) | OAuth callback URL |
+| `TOKEN_ENCRYPTION_KEY` | Yes (SaaS) | 64-char hex string (32 bytes) for AES-256-GCM. Generate with `openssl rand -hex 32` |
 
 ### LLM Providers
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `LLM1_PROVIDER` | **Yes** | — | Provider for stage 1: `mock`, `openai`, `azure_openai`, `anthropic` |
-| `LLM2_PROVIDER` | **Yes** | — | Provider for stage 2: `mock`, `openai`, `azure_openai`, `anthropic` |
-| `LLM3_ENABLED` | No | `false` | Enable text accessibility checker |
-| `LLM3_PROVIDER` | If LLM3 enabled | — | Provider for stage 3: `mock`, `openai`, `azure_openai`, `anthropic` |
-| `LLM4_ENABLED` | No | `false` | Enable visual accessibility checker |
-| `LLM4_PROVIDER` | If LLM4 enabled | — | Provider for stage 4: `mock`, `openai`, `anthropic` (**not** `azure_openai`) |
+Each stage of the pipeline can use a different LLM provider:
 
-### OpenAI
+| Stage | Purpose | Vision Required | Recommended Model |
+|-------|---------|-----------------|-------------------|
+| LLM1 | Context selection (preprocessor) | No | `gpt-4o-mini` or `claude-haiku-4-5-20251001` |
+| LLM2 | Code review (reviewer) | No | `gpt-4o` or `claude-sonnet-4-6` |
+| LLM3 | Accessibility audit | No | `gpt-4o` or `claude-sonnet-4-6` |
+| LLM4 | Visual accessibility (screenshots) | **Yes** | `gpt-4o` or `claude-sonnet-4-6` |
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `OPENAI_API_KEY` | If any stage uses `openai` | — | OpenAI API key |
-| `OPENAI_MODEL_LLM1` | If LLM1 uses `openai` | — | Model for stage 1 (e.g. `gpt-4o`) |
-| `OPENAI_MODEL_LLM2` | If LLM2 uses `openai` | — | Model for stage 2 |
-| `OPENAI_MODEL_LLM3` | If LLM3 uses `openai` | — | Model for stage 3 |
-| `OPENAI_MODEL_LLM4` | If LLM4 uses `openai` | — | Model for stage 4 (must support vision) |
+---
 
-### Azure OpenAI
+## API Reference
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `AZURE_OPENAI_ENDPOINT` | If any stage uses `azure_openai` | — | Endpoint URL (e.g. `https://my-resource.openai.azure.com`) |
-| `AZURE_OPENAI_API_KEY` | If any stage uses `azure_openai` | — | Azure OpenAI API key |
-| `AZURE_OPENAI_DEPLOYMENT_LLM1` | If LLM1 uses `azure_openai` | — | Deployment name for stage 1 |
-| `AZURE_OPENAI_DEPLOYMENT_LLM2` | If LLM2 uses `azure_openai` | — | Deployment name for stage 2 |
-| `AZURE_OPENAI_DEPLOYMENT_LLM3` | If LLM3 uses `azure_openai` | — | Deployment name for stage 3 |
+### Webhooks
 
-> **Note:** Azure OpenAI cannot be used for LLM4 — it does not support the vision API required for screenshot analysis. Use `openai` or `anthropic` for LLM4.
+#### `POST /webhooks/azure-devops/pr` (Single-Tenant)
 
-### Anthropic
+Receives Azure DevOps pull request webhook events.
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `ANTHROPIC_API_KEY` | If any stage uses `anthropic` | — | Anthropic API key |
-| `ANTHROPIC_MODEL_LLM1` | If LLM1 uses `anthropic` | — | Model for stage 1 (e.g. `claude-sonnet-4-6`) |
-| `ANTHROPIC_MODEL_LLM2` | If LLM2 uses `anthropic` | — | Model for stage 2 |
-| `ANTHROPIC_MODEL_LLM3` | If LLM3 uses `anthropic` | — | Model for stage 3 |
-| `ANTHROPIC_MODEL_LLM4` | If LLM4 uses `anthropic` | — | Model for stage 4 (supports vision natively) |
+**Headers:**
+- `x-webhook-secret` (required): Must match `WEBHOOK_SECRET`
 
-### Diff & Review Limits
+**Body:** Standard ADO webhook payload (supports both `pullRequestId` and `resource.pullRequestId` formats).
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `MAX_FILES` | No | `20` | Max files to process per PR |
-| `MAX_TOTAL_DIFF_LINES` | No | `2000` | Max total diff lines across all files |
-| `MAX_HUNKS` | No | `80` | Max diff hunks to process |
-| `HUNK_CONTEXT_LINES` | No | `20` | Lines of surrounding context per hunk |
+**Optional fields:**
+- `previewUrl` (string, valid URL): Page URL for visual accessibility screenshots
 
-### Token Budgets
+**Response:** `200 { ok: true }`
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `TOKEN_BUDGET_LLM1` | No | `3000` | Max output tokens for preprocessor |
-| `TOKEN_BUDGET_LLM2` | No | `6000` | Max output tokens for reviewer |
-| `TOKEN_BUDGET_LLM3` | No | `4000` | Max output tokens for accessibility checker |
-| `TOKEN_BUDGET_LLM4` | No | `8000` | Max output tokens for visual accessibility |
+#### `POST /webhooks/ado/:tenantId` (Multi-Tenant)
 
-### Accessibility (LLM3)
+**Path params:**
+- `tenantId` (UUID): Tenant identifier
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `A11Y_FILE_EXTENSIONS` | No | `.html,.jsx,.tsx,.vue,.svelte,.css,.scss` | Comma-separated file extensions to run LLM3 on |
+**Headers (one required):**
+- `Authorization: Basic <base64(user:secret)>` — Basic auth with webhook secret as password
+- `x-webhook-secret` — Webhook secret header
 
-### Visual Accessibility (LLM4)
+**Body:** Same as single-tenant endpoint.
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `VISUAL_A11Y_VIEWPORT_WIDTH` | No | `1280` | Browser viewport width for screenshots |
-| `VISUAL_A11Y_VIEWPORT_HEIGHT` | No | `900` | Browser viewport height for screenshots |
-| `VISUAL_A11Y_PAGES` | No | `/` | Comma-separated page paths to screenshot (relative to `previewUrl`) |
-| `VISUAL_A11Y_WAIT_MS` | No | `3000` | Wait time after page load before screenshot (ms) |
-| `VISUAL_A11Y_MAX_SCREENSHOTS` | No | `5` | Max number of pages to screenshot |
+**Response:** `202 { ok: true }`
 
-### Queue (Redis)
+### OAuth
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `REDIS_URL` | No | — | Redis connection URL. If set, enables async queue mode (e.g. `redis://localhost:6379`) |
+#### `GET /auth/ado/authorize`
 
-### Audit Trail
+Redirects to Azure DevOps OAuth authorization page.
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `AUDIT_ENABLED` | No | `true` | Enable audit logging |
-| `AUDIT_RETENTION_DAYS` | No | `30` | Days to retain audit records before pruning |
+#### `GET /auth/ado/callback?code=...&state=...`
 
-### Review Behavior
+Handles the OAuth callback, exchanges the code for tokens, creates/updates the tenant, and redirects to `OAUTH_REDIRECT_URI`.
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `REVIEW_MIN_SEVERITY` | No | `low` | Minimum severity to post: `low`, `medium`, `high`, `critical` |
-| `REVIEW_STRICTNESS` | No | `balanced` | Review strictness mode: `relaxed`, `balanced`, `strict` |
+#### `DELETE /auth/ado/connection/:tenantId`
 
-### Logging
+Revokes OAuth tokens for a tenant. **Requires authentication** — the caller must be the tenant owner (JWT `tenantId` must match path param).
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `LOG_LEVEL` | No | `info` | Pino log level: `trace`, `debug`, `info`, `warn`, `error`, `fatal` |
+### Management API
 
-## LLM Providers
+All `/api/*` routes require `Authorization: Bearer <JWT>` header. The JWT is verified against Azure DevOps JWKS. The tenant is resolved from the JWT `aud` claim.
 
-| Provider | ID | API | Vision Support | Required Env Vars |
-|---|---|---|---|---|
-| OpenAI | `openai` | Responses API | Yes (GPT-4o, etc.) | `OPENAI_API_KEY`, `OPENAI_MODEL_LLM*` |
-| Azure OpenAI | `azure_openai` | Chat Completions | No (LLM1-3 only) | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT_LLM*` |
-| Anthropic | `anthropic` | Messages API | Yes (Claude models) | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL_LLM*` |
-| Mock | `mock` | None | N/A | None |
+#### Tenants
 
-**Example: Anthropic for all stages**
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/tenants/me` | Get current tenant info |
 
-```env
-LLM1_PROVIDER=anthropic
-LLM2_PROVIDER=anthropic
-LLM3_ENABLED=true
-LLM3_PROVIDER=anthropic
-LLM4_ENABLED=true
-LLM4_PROVIDER=anthropic
-ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_MODEL_LLM1=claude-sonnet-4-6
-ANTHROPIC_MODEL_LLM2=claude-sonnet-4-6
-ANTHROPIC_MODEL_LLM3=claude-sonnet-4-6
-ANTHROPIC_MODEL_LLM4=claude-sonnet-4-6
-```
+#### Projects
 
-**Example: Azure OpenAI for LLM1-2, OpenAI for LLM4**
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/projects` | List enrolled projects |
+| `POST` | `/api/projects/:id/enable` | Enable project + create webhook subscription |
+| `POST` | `/api/projects/:id/disable` | Disable project + remove webhook |
 
-```env
-LLM1_PROVIDER=azure_openai
-LLM2_PROVIDER=azure_openai
-LLM4_ENABLED=true
-LLM4_PROVIDER=openai
-AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com
-AZURE_OPENAI_API_KEY=...
-AZURE_OPENAI_DEPLOYMENT_LLM1=gpt-4o
-AZURE_OPENAI_DEPLOYMENT_LLM2=gpt-4o
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL_LLM4=gpt-4o
-```
+#### Reviews
 
-## Pipeline Stages
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/reviews` | List reviews (paginated). Query: `page`, `limit` (1-100), `projectId` |
+| `GET` | `/api/reviews/:id` | Get review details with findings |
+| `POST` | `/api/reviews/:id/retrigger` | Re-enqueue a review |
 
-### LLM1 — Context Preprocessor
+#### Config
 
-Runs once per diff hunk. Receives the hunk text, local file context, and any candidate context snippets. Selects the minimal useful context for the reviewer within a token budget.
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/config` | Get tenant review configuration |
+| `PUT` | `/api/config` | Update tenant review configuration |
 
-- **Input:** hunk text, surrounding file context, token budget
-- **Output:** selected context snippets with reasoning
-- **Purpose:** Prevents sending large irrelevant context to the reviewer
+### Health
 
-### LLM2 — Code Reviewer
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Liveness check. Returns `200 { status: "ok" }` |
+| `GET` | `/ready` | Readiness check. Returns `503` if Redis queue is unreachable |
 
-Runs once per diff hunk with the preprocessed context. Performs a full code review and returns structured findings.
+---
 
-- **Issue types:** `bug`, `security`, `performance`, `style`, `correctness`, `maintainability`, `testing`, `docs`, `accessibility`
-- **Severity levels:** `low`, `medium`, `high`, `critical`
-- **Strictness modes:**
-  - `relaxed` — only flags clear bugs, security vulnerabilities, and critical issues
-  - `balanced` — default behavior, flags actionable issues
-  - `strict` — flags all potential issues including style, naming, and subtle bugs
-- **Output:** array of findings with file path, line range, message, and optional suggestion
+## Database
 
-### LLM3 — Accessibility Checker (optional)
+### Schema
 
-Runs once per diff hunk, only on files matching `A11Y_FILE_EXTENSIONS`. Performs a WCAG 2.1 text-based accessibility audit on the diff.
+The multi-tenant mode uses PostgreSQL with Drizzle ORM. Six tables:
 
-- **Enable:** `LLM3_ENABLED=true` + `LLM3_PROVIDER=...`
-- **Checks:** missing alt text, ARIA attributes, semantic HTML, keyboard navigation, color contrast, form labels, focus management, screen reader compatibility
-- **Strictness modes:**
-  - `relaxed` — WCAG 2.1 Level A only
-  - `balanced` — Level A + AA
-  - `strict` — Level A + AA + AAA
-- **File filter:** only runs on hunks in files ending with one of `A11Y_FILE_EXTENSIONS`
+| Table | Description |
+|-------|-------------|
+| `tenants` | Tenant records (org ID, status, plan) |
+| `tenant_oauth_tokens` | Encrypted OAuth tokens per tenant |
+| `tenant_configs` | Per-tenant review configuration overrides |
+| `project_enrollments` | ADO projects enrolled for review (with encrypted webhook secrets) |
+| `reviews` | Review execution records (status, timings, metadata) |
+| `review_findings` | Individual findings per review (severity, file, line, message, hash) |
 
-### LLM4 — Visual Accessibility (optional)
+All sensitive data (tokens, API keys, webhook secrets) is encrypted at rest with AES-256-GCM.
 
-Runs once per review (not per hunk). Uses Playwright to capture full-page screenshots of a preview deployment, then sends them to a vision-capable LLM for analysis.
-
-- **Enable:** `LLM4_ENABLED=true` + `LLM4_PROVIDER=openai|anthropic` (not `azure_openai`)
-- **Requires:** `previewUrl` field in the webhook payload + Playwright installed
-- **WCAG categories checked** (10 total):
-  1. Color Contrast (1.4.3, 1.4.6)
-  2. Focus Indicators (2.4.7)
-  3. Text Sizing & Readability (1.4.4)
-  4. Touch Target Size (2.5.5)
-  5. Layout & Reflow (1.4.10)
-  6. Visual Labels (1.3.5, 3.3.2)
-  7. Color-Only Information (1.4.1)
-  8. Motion & Animation (2.3.1)
-  9. Consistent Navigation (3.2.3)
-  10. Error Identification (3.3.1)
-- **Configuration:** viewport size, page paths, wait time, max screenshots (see [Visual Accessibility env vars](#visual-accessibility-llm4))
-
-## Webhook Integration
-
-### Endpoint
-
-```
-POST /webhooks/azure-devops/pr
-```
-
-### Authentication
-
-Include the shared secret in the `x-webhook-secret` header:
-
-```
-x-webhook-secret: <your-WEBHOOK_SECRET>
-```
-
-The secret is compared using a timing-safe comparison. Returns `401` on mismatch.
-
-### Payload
-
-The endpoint accepts two payload shapes:
-
-**Flat format:**
-
-```json
-{
-  "pullRequestId": 123,
-  "repository": { "id": "repo-guid" },
-  "previewUrl": "https://preview.example.com"
-}
-```
-
-**Nested Azure DevOps Service Hook format:**
-
-```json
-{
-  "resource": {
-    "pullRequestId": 123,
-    "repository": { "id": "repo-guid" }
-  },
-  "previewUrl": "https://preview.example.com"
-}
-```
-
-The `previewUrl` field is optional. When provided and LLM4 is enabled, visual accessibility screenshots will be captured from this URL.
-
-### Curl examples
-
-**Basic trigger:**
+### Migrations
 
 ```bash
-curl -X POST http://localhost:3000/webhooks/azure-devops/pr \
-  -H "content-type: application/json" \
-  -H "x-webhook-secret: replace-me" \
-  -d '{"resource":{"pullRequestId":1,"repository":{"id":"REPO_ID"}}}'
+# Generate a new migration after schema changes
+npx drizzle-kit generate
+
+# Run pending migrations
+node dist/db/migrate.js
+# Or: DATABASE_URL=... npx tsx src/db/migrate.ts
 ```
 
-**With preview URL for LLM4:**
+Migrations run automatically on server startup when `DATABASE_URL` is set.
+
+---
+
+## Authentication
+
+### Single-Tenant Mode
+
+Webhooks are authenticated using a shared secret (`WEBHOOK_SECRET`) validated with constant-time comparison.
+
+### Multi-Tenant SaaS Mode
+
+**Webhook authentication:** Per-project webhook secrets stored encrypted in the database. Validated via `Authorization: Basic` header or `x-webhook-secret`.
+
+**API authentication (adoAuth middleware):**
+1. **SaaS mode:** JWT signature verified against the [Azure DevOps JWKS endpoint](https://app.vstoken.visualstudio.com/_apis/Token/SessionTokens) using the `jose` library. Requires valid signature, `exp` claim, and matching tenant in the database.
+2. **Self-hosted mode:** Bearer token compared against `ADO_PAT` with `crypto.timingSafeEqual`. Falls back to JWT verification if the API key doesn't match.
+
+**OAuth token lifecycle:**
+- Tokens encrypted with AES-256-GCM before storage
+- Background refresh job runs every 10 minutes
+- Tokens refreshed when within 5 minutes of expiry
+- Failed refresh after 3 retries marks tenant as `needs_reauth`
+
+---
+
+## Testing
 
 ```bash
-curl -X POST http://localhost:3000/webhooks/azure-devops/pr \
-  -H "content-type: application/json" \
-  -H "x-webhook-secret: replace-me" \
-  -d '{
-    "resource": {"pullRequestId": 1, "repository": {"id": "REPO_ID"}},
-    "previewUrl": "https://preview-pr-1.example.com"
-  }'
+# Run all tests
+npm test
+
+# Run with coverage (80% threshold)
+npm run test:coverage
+
+# Run specific test file
+npx vitest run test/middleware/adoAuth.test.ts
+
+# Watch mode
+npx vitest
 ```
 
-## Azure DevOps Service Hook Setup
+**Test structure:**
+- Unit tests for all modules (LLM stages, config, severity, diff collection)
+- Integration tests for database repos, auth middleware, routes (require PostgreSQL, skipped automatically when `DATABASE_URL` is absent)
+- E2E test for the full review pipeline (mock LLM providers)
 
-1. **Expose your local server** (for development):
-   - ngrok: `ngrok http 3000`
-   - cloudflared: `cloudflared tunnel --url http://localhost:3000`
+**Current:** 235 tests passing, 103 DB-dependent tests auto-skipped without PostgreSQL.
 
-2. In Azure DevOps, go to **Project Settings** → **Service hooks** → **Create subscription**
+---
 
-3. Select **Web Hooks** as the service
+## Deployment
 
-4. Choose trigger event(s):
-   - **Pull request created**
-   - **Pull request updated**
-
-5. Configure the action:
-   - **URL:** `https://<your-host>/webhooks/azure-devops/pr`
-   - **HTTP headers:** `x-webhook-secret:<your-WEBHOOK_SECRET>`
-
-6. Click **Test** to send a test event, then **Finish**
-
-## Calling from an Azure Pipeline
-
-You can trigger a review from a pipeline task, for example after deploying a preview environment. This lets you pass a `previewUrl` for LLM4 visual accessibility checks.
-
-```yaml
-# Example: Trigger LLM review after deploying a preview
-- task: Bash@3
-  displayName: "Trigger LLM Code Review"
-  inputs:
-    targetType: inline
-    script: |
-      curl -sf -X POST "$(LLM_REVIEW_URL)/webhooks/azure-devops/pr" \
-        -H "content-type: application/json" \
-        -H "x-webhook-secret: $(WEBHOOK_SECRET)" \
-        -d '{
-          "pullRequestId": $(System.PullRequest.PullRequestId),
-          "repository": { "id": "$(Build.Repository.ID)" },
-          "previewUrl": "$(PREVIEW_URL)"
-        }'
-  env:
-    LLM_REVIEW_URL: $(LLM_REVIEW_URL)
-    WEBHOOK_SECRET: $(WEBHOOK_SECRET)
-    PREVIEW_URL: $(PREVIEW_URL)
-```
-
-**Pipeline variables to set:**
-
-| Variable | Description |
-|---|---|
-| `LLM_REVIEW_URL` | Base URL of your deployed llm-review-service (e.g. `https://ca-llm-review.example.azurecontainerapps.io`) |
-| `WEBHOOK_SECRET` | Same value as the service's `WEBHOOK_SECRET` env var (store as a secret variable) |
-| `PREVIEW_URL` | URL of the preview deployment for this PR (optional, needed for LLM4) |
-
-## Deployment Options
-
-### Local Development
+### Docker
 
 ```bash
-npm install
-npm run dev
-```
-
-The server starts with hot-reload via `tsx watch` on `http://localhost:3000`.
-
-### Docker & docker-compose
-
-The included `docker-compose.yml` starts the service and a Redis sidecar:
-
-```bash
-# Build and start both containers
-docker compose up --build
-```
-
-This starts:
-- **llm-review-service** on port `${PORT:-3000}` with health checks
-- **Redis 7** on port `6379` with health checks
-
-The service container waits for Redis to be healthy before starting.
-
-**Standalone Docker build** (without Redis):
-
-```bash
+# Build
 docker build -t llm-review-service .
-docker run --rm -p 3000:3000 --env-file .env llm-review-service
+
+# Run
+docker run -p 3000:3000 --env-file .env llm-review-service
 ```
 
-The Dockerfile uses a multi-stage build: compiles TypeScript in a `node:20-slim` build stage, then copies the output to a production image with only production dependencies. Runs as a non-root user (`appuser`).
+The Dockerfile uses a multi-stage build:
+1. **Build stage:** `node:20.19-slim` — installs deps, compiles TypeScript
+2. **Runtime stage:** `node:20.19-slim` — production deps only, non-root user (`appuser`), copies `dist/` and migrations
 
 ### Azure Container Apps
 
-For production deployment to Azure Container Apps:
+The project includes an Azure Pipelines CI/CD configuration (`azure-pipelines.yml`) with three stages:
 
-**1. Prepare the environment file:**
+1. **Build & Test:** lint, typecheck, build, test with coverage
+2. **Docker Build & Push:** Builds and pushes to Azure Container Registry (`acrcodereview.azurecr.io`)
+3. **Deploy:** Updates the Azure Container App (`ca-llm-review`)
 
-```bash
-cp .env.azure.example .env.azure
-# Edit .env.azure with your secrets and configuration
+Infrastructure provisioning script: `infra/setup.sh` (creates resource group, ACR, PostgreSQL, Container Apps environment).
+
+---
+
+## Project Structure
+
+```
+src/
+├── server.ts                 # Entry point, startup, graceful shutdown
+├── app.ts                    # Fastify app builder, route registration
+├── config.ts                 # Legacy single-tenant config (Zod schema)
+├── logger.ts                 # Pino logger factory
+│
+├── config/
+│   ├── appConfig.ts          # Multi-tenant app config (Zod schema)
+│   └── tenantConfig.ts       # Per-tenant config types
+│
+├── auth/
+│   ├── encryption.ts         # AES-256-GCM encrypt/decrypt + key derivation
+│   └── tokenManager.ts       # OAuth token store, refresh, revoke
+│
+├── azure/
+│   ├── adoClient.ts          # Azure DevOps REST client (OAuth + PAT auth)
+│   ├── adoTypes.ts           # ADO type definitions
+│   └── threadBuilder.ts      # Converts findings to PR comment threads
+│
+├── context/
+│   └── tenantContext.ts      # Builds per-request tenant context
+│
+├── db/
+│   ├── connection.ts         # PostgreSQL pool management
+│   ├── migrate.ts            # Migration runner (CLI + programmatic)
+│   ├── schema.ts             # Drizzle table definitions
+│   ├── migrations/           # SQL migration files
+│   └── repos/                # Data access layer
+│       ├── tenantRepo.ts
+│       ├── configRepo.ts
+│       ├── projectRepo.ts
+│       └── reviewRepo.ts
+│
+├── llm/
+│   ├── types.ts              # LLMClient interface + provider factory
+│   ├── reviewer.ts           # Code review stage (LLM2)
+│   ├── preprocessor.ts       # Context selection stage (LLM1)
+│   ├── accessibilityChecker.ts    # Text a11y stage (LLM3)
+│   ├── visualAccessibilityChecker.ts  # Visual a11y stage (LLM4)
+│   ├── screenshotCapture.ts  # Playwright screenshot capture
+│   ├── prompts/              # LLM prompt templates
+│   └── providers/            # Provider implementations
+│       ├── mockProvider.ts
+│       ├── openaiResponsesProvider.ts
+│       ├── azureOpenAIProvider.ts
+│       └── anthropicProvider.ts
+│
+├── middleware/
+│   ├── adoAuth.ts            # JWT/API key authentication
+│   └── rateLimiter.ts        # Per-tenant rate limiting
+│
+├── review/
+│   ├── runReview.ts          # Main review orchestration pipeline
+│   ├── queue.ts              # BullMQ queue + worker
+│   ├── audit.ts              # Audit store (file, DB, in-memory)
+│   ├── idempotency.ts        # Finding deduplication store
+│   ├── diffCollector.ts      # Diff hunk extraction
+│   ├── severity.ts           # Severity filtering
+│   ├── limits.ts             # Config-based review limits
+│   └── hunkTypes.ts          # DiffHunk type definitions
+│
+├── routes/
+│   ├── webhooks.ts           # Webhook endpoints (legacy + multi-tenant)
+│   ├── auth.ts               # OAuth flow routes
+│   ├── health.ts             # Health check endpoints
+│   └── api/                  # Management API (JWT-protected)
+│       ├── index.ts
+│       ├── tenants.ts
+│       ├── projects.ts
+│       ├── reviews.ts
+│       └── config.ts
+│
+└── jobs/
+    └── tokenRefresh.ts       # Background OAuth token refresh
 ```
 
-**2. Run the infrastructure setup script:**
+---
 
-```bash
-az login
-bash infra/setup.sh
-```
+## Security
 
-**What `infra/setup.sh` creates:**
-
-| Resource | Name | Description |
-|---|---|---|
-| Resource Group | `rg-code-review` | Contains all resources |
-| Azure Container Registry | `acrcodereview` | Stores Docker images |
-| Container Apps Environment | `cae-code-review` | Hosting environment |
-| Container App | `ca-llm-review` | The running service with managed identity |
-
-The script:
-- Sources all variables from `.env.azure`
-- Validates required secrets (`WEBHOOK_SECRET`, `ADO_ORG`, `ADO_PROJECT`, `ADO_PAT`, `ANTHROPIC_API_KEY`, etc.)
-- Creates the Container App with secrets stored securely (via `secretref:`)
-- Assigns the `AcrPull` role to the Container App's managed identity
-- Outputs the FQDN, health check URL, and webhook URL
-
-**3. CI/CD pipeline (`azure-pipelines.yml`):**
-
-The included pipeline has 3 stages:
-
-| Stage | Trigger | Description |
-|---|---|---|
-| **Build & Test** | All pushes | `npm ci` → lint → typecheck → build → test with coverage |
-| **Docker Build & Push** | Main branch only | Builds Docker image, pushes to ACR with `BuildId` and `latest` tags |
-| **Deploy** | After Docker push | Updates the Container App image to the new `BuildId` tag |
-
-Pipeline variables to configure in Azure DevOps:
-
-| Variable | Description |
-|---|---|
-| `azureSubscription` | Azure Resource Manager service connection name |
-| `acrName` | ACR name (default: `acrcodereview`) |
-| `resourceGroup` | Resource group (default: `rg-code-review`) |
-| `containerAppName` | Container App name (default: `ca-llm-review`) |
-
-## Health Checks
-
-| Endpoint | Purpose | Behavior |
-|---|---|---|
-| `GET /health` | Liveness probe | Always returns `{"status":"ok"}` (200) |
-| `GET /ready` | Readiness probe | Returns `{"status":"ready"}` (200). If Redis is configured, pings Redis first — returns 503 if unreachable |
-
-**Container Apps / Kubernetes probe config example:**
-
-```yaml
-probes:
-  - type: liveness
-    httpGet:
-      path: /health
-      port: 3000
-    initialDelaySeconds: 10
-    periodSeconds: 10
-  - type: readiness
-    httpGet:
-      path: /ready
-      port: 3000
-    initialDelaySeconds: 5
-    periodSeconds: 5
-```
-
-## Queue Mode (Redis)
-
-When `REDIS_URL` is set, the webhook immediately enqueues a BullMQ job and returns `{"ok":true}`. A worker in the same process picks up the job and runs the review pipeline.
-
-**Benefits:**
-- Webhook responds instantly (no timeout risk for large PRs)
-- Automatic retries: 3 attempts with exponential backoff (1s, 2s, 4s)
-- Failed jobs are retained (last 100) for debugging
-- Completed jobs are removed automatically
-
-**Local Redis for development:**
-
-```bash
-docker run --rm -p 6379:6379 redis:7
-```
-
-```env
-REDIS_URL=redis://localhost:6379
-```
-
-Without `REDIS_URL`, the review runs synchronously via `setImmediate` after the webhook responds (with a 2-minute timeout).
-
-## Audit Trail
-
-When `AUDIT_ENABLED=true` (the default), every review is logged to `.data/audit.jsonl`.
-
-**Each audit record contains:**
-
-- Review ID and request ID
-- Repository ID, PR ID, source/target commits
-- List of changed files
-- Number of hunks processed
-- Per-hunk results: provider, model, timing (ms), finding count for each LLM stage
-- All findings with their status:
-  - `posted` — published to Azure DevOps as a PR thread
-  - `skipped_duplicate` — already posted (idempotency dedup)
-  - `filtered` — below minimum severity threshold
-- Timing breakdown: total, fetch PR, list changes, collect diffs (all in ms)
-- Review status: `success` or `failure` (with error message)
-- Timestamps: started at, completed at
-
-**Retention:** expired records are pruned every 6 hours. Default retention is 30 days (configurable via `AUDIT_RETENTION_DAYS`).
-
-If the file audit store is unavailable (e.g. read-only filesystem), it falls back to an in-memory store.
-
-## Severity Filtering
-
-`REVIEW_MIN_SEVERITY` controls which findings are posted to Azure DevOps. Findings below the threshold are recorded in the audit trail as `filtered` but not posted.
-
-| `REVIEW_MIN_SEVERITY` | Posts `low` | Posts `medium` | Posts `high` | Posts `critical` |
-|---|---|---|---|---|
-| `low` (default) | Yes | Yes | Yes | Yes |
-| `medium` | No | Yes | Yes | Yes |
-| `high` | No | No | Yes | Yes |
-| `critical` | No | No | No | Yes |
-
-## Review Strictness
-
-`REVIEW_STRICTNESS` controls how aggressive the LLM reviewers are. Affects both LLM2 (code review) and LLM3 (accessibility).
-
-| Mode | LLM2 Behavior | LLM3 Behavior |
-|---|---|---|
-| `relaxed` | Only flags clear bugs, security vulnerabilities, and critical issues. Ignores style and subjective concerns. | WCAG 2.1 Level A violations only |
-| `balanced` (default) | Flags actionable and specific issues across all categories | WCAG 2.1 Level A + AA |
-| `strict` | Flags all potential issues including style, naming, maintainability, and subtle bugs | WCAG 2.1 Level A + AA + AAA |
-
-## Idempotency
-
-Findings are deduplicated using a SHA-256 hash of `issueType + severity + filePath + startLine + endLine + message + suggestion`. The hash is scoped to `repoId + prId + iteration` (commit SHA).
-
-- **Storage:** `.data/idempotency.json` (falls back to in-memory if file is unavailable)
-- **Expiry:** entries older than 30 days are pruned automatically (every 6 hours)
-- **Effect:** if the same finding was already posted for the same PR iteration, it is silently skipped
-
-This prevents duplicate comments when a webhook fires multiple times for the same PR update.
-
-## npm Scripts
-
-| Script | Command | Description |
-|---|---|---|
-| `dev` | `tsx watch src/server.ts` | Start dev server with hot reload |
-| `build` | `tsc -p tsconfig.json` | Compile TypeScript to `dist/` |
-| `start` | `node dist/server.js` | Start production server |
-| `lint` | `eslint . --ext .ts` | Run ESLint |
-| `typecheck` | `tsc --noEmit` | Type-check without emitting |
-| `test` | `vitest run` | Run tests once |
-| `test:coverage` | `vitest run --coverage` | Run tests with V8 coverage |
-
-## Troubleshooting
-
-**401/403 from Azure DevOps**
-Verify `ADO_ORG`, `ADO_PROJECT`, and PAT scopes. The PAT needs **Code: Read & Write** permissions.
-
-**No inline comments appear on the PR**
-Azure DevOps threads require right-side line ranges. Ensure `startLine`/`endLine` map to the PR source (after) file. Check the audit trail in `.data/audit.jsonl` to see if findings were posted, filtered, or skipped.
-
-**Provider config errors at startup**
-The service validates provider-specific env vars at boot. Start with `LLM1_PROVIDER=mock` and `LLM2_PROVIDER=mock` to verify the wiring works, then switch to real providers.
-
-**LLM4 visual checks not running**
-- Verify `LLM4_ENABLED=true` and `LLM4_PROVIDER` is set to `openai` or `anthropic` (not `azure_openai`)
-- The webhook payload must include a `previewUrl` field
-- Playwright must be installed: `npm install playwright` then `npx playwright install chromium`
-- Check logs for "Playwright not installed" or "provider does not support vision" warnings
-
-**Large PR timeouts**
-In synchronous mode (no Redis), reviews have a 2-minute timeout. For large PRs:
-- Reduce `MAX_FILES`, `MAX_HUNKS`, or `MAX_TOTAL_DIFF_LINES`
-- Enable queue mode with `REDIS_URL` (no timeout on the webhook, retries on failure)
-
-**Duplicate comments on PRs**
-The idempotency store (`.data/idempotency.json`) may be inaccessible. Check write permissions on the `.data/` directory. In Docker, ensure the directory is writable by the `appuser` (UID 1001).
-
-**Review too noisy / too quiet**
-- Increase `REVIEW_MIN_SEVERITY` to `medium` or `high` to reduce noise
-- Set `REVIEW_STRICTNESS=relaxed` to focus only on critical issues
-- Set `REVIEW_STRICTNESS=strict` for thorough reviews
+- **JWT verification:** All API requests verified against ADO JWKS endpoint using `jose.jwtVerify()`
+- **Constant-time comparison:** Webhook secrets and API keys compared with `crypto.timingSafeEqual`
+- **Encryption at rest:** OAuth tokens, API keys, and webhook secrets encrypted with AES-256-GCM (random 12-byte IV, 16-byte auth tag)
+- **Key derivation:** `TOKEN_ENCRYPTION_KEY` must be a 64-character hex string (32 bytes). Centralized `deriveEncryptionKey()` utility used consistently across all code paths
+- **SQL injection prevention:** Drizzle ORM with parameterized queries throughout
+- **Input validation:** Zod schemas on all webhook payloads, API inputs, config values, and pagination parameters
+- **Rate limiting:** Per-tenant rate limiting via `@fastify/rate-limit`
+- **Anti-enumeration:** Webhook and auth endpoints return uniform `401` responses regardless of whether tenant exists or secret is wrong
+- **Tenant isolation:** All database queries scoped by `tenantId`; project repo update restricted to safe fields only
+- **Non-root container:** Docker image runs as `appuser` (UID 1001)
+- **Localhost-only ports:** PostgreSQL and Redis bound to `127.0.0.1` in docker-compose
+- **No secrets in source:** All credentials via environment variables; `.env` files in `.gitignore`

@@ -6,7 +6,7 @@ import type { AdoPullRequest } from "../azure/adoTypes";
 import { findingToAdoThread, visualFindingToAdoThread, buildStartingSummary, buildCompletedSummaryContent, buildErrorSummaryContent, buildStatusDescription } from "../azure/threadBuilder";
 import type { FindingSummaryStats } from "../azure/threadBuilder";
 import { createLLMClient } from "../llm/types";
-import type { Finding } from "../llm/types";
+import type { LLMClient, Finding } from "../llm/types";
 import { runPreprocessor } from "../llm/preprocessor";
 import { runReviewer } from "../llm/reviewer";
 import { runAccessibilityCheck } from "../llm/accessibilityChecker";
@@ -17,9 +17,12 @@ import { withTiming } from "../util/timing";
 import { collectDiffHunks } from "./diffCollector";
 import type { DiffHunk } from "./hunkTypes";
 import { createFileIdempotencyStore, createInMemoryIdempotencyStore } from "./idempotency";
+import type { IdempotencyStore } from "./idempotency";
 import { limitsFromConfig } from "./limits";
+import type { ReviewLimits } from "./limits";
 import { filterFindings } from "./severity";
 import type { AuditStore, AuditRecord, AuditFinding, AuditHunkResult } from "./audit";
+import type { TenantContext } from "../context/tenantContext";
 
 async function safeAdoCall<T>(fn: () => Promise<T>, logger: ReturnType<typeof createLogger>, label: string): Promise<T | undefined> {
   try {
@@ -37,16 +40,25 @@ export async function runReview(_args: {
   requestId?: string;
   auditStore?: AuditStore;
   previewUrl?: string;
+  context?: TenantContext;
+  idempotencyStore?: IdempotencyStore;
 }): Promise<void> {
-  const { config, repoId, prId, requestId, previewUrl } = _args;
-  const logger = createLogger().child({ repoId, prId, ...(requestId ? { requestId } : {}) });
-  const ado = new AdoClient(config, logger);
-  const llm1 = createLLMClient(config, "llm1");
-  const llm2 = createLLMClient(config, "llm2");
+  const { config, repoId, prId, requestId, previewUrl, context } = _args;
 
-  const llm3Enabled = config.LLM3_ENABLED === true && !!config.LLM3_PROVIDER;
-  const llm3 = llm3Enabled ? createLLMClient(config, "llm3") : null;
-  const a11yExtensions: string[] = config.A11Y_FILE_EXTENSIONS ?? [".html", ".jsx", ".tsx", ".vue", ".svelte", ".css", ".scss"];
+  // Resolve dependencies from TenantContext or legacy Config
+  const logger = context?.logger.child({ repoId, prId, ...(requestId ? { requestId } : {}) })
+    ?? createLogger().child({ repoId, prId, ...(requestId ? { requestId } : {}) });
+  const ado = context?.adoClient ?? new AdoClient(config, logger);
+  const llm1: LLMClient = context?.llmClients.llm1 ?? createLLMClient(config, "llm1");
+  const llm2: LLMClient = context?.llmClients.llm2 ?? createLLMClient(config, "llm2");
+
+  const llm3Enabled = context
+    ? !!context.llmClients.llm3
+    : config.LLM3_ENABLED === true && !!config.LLM3_PROVIDER;
+  const llm3: LLMClient | null = context?.llmClients.llm3 ?? (llm3Enabled ? createLLMClient(config, "llm3") : null);
+  const a11yExtensions: string[] = context?.config.a11yFileExtensions
+    ?? config.A11Y_FILE_EXTENSIONS
+    ?? [".html", ".jsx", ".tsx", ".vue", ".svelte", ".css", ".scss"];
 
   logger.debug({ stage: "llm1", provider: llm1.providerName, model: llm1.modelName }, "LLM client");
   logger.debug({ stage: "llm2", provider: llm2.providerName, model: llm2.modelName }, "LLM client");
@@ -54,9 +66,8 @@ export async function runReview(_args: {
     logger.debug({ stage: "llm3", provider: llm3.providerName, model: llm3.modelName }, "LLM client");
   }
 
-  const idempotency = await createFileIdempotencyStore({
-    dataDir: path.join(process.cwd(), ".data")
-  }).catch(() => createInMemoryIdempotencyStore());
+  const idempotency: IdempotencyStore = _args.idempotencyStore
+    ?? await createFileIdempotencyStore({ dataDir: path.join(process.cwd(), ".data") }).catch(() => createInMemoryIdempotencyStore());
 
   // ── Audit state ──
   const startedAt = new Date().toISOString();
@@ -116,15 +127,17 @@ export async function runReview(_args: {
         repoId,
         pr: pr!,
         changedFilePaths,
-        limits: limitsFromConfig(config)
+        limits: context
+          ? { maxFiles: context.config.maxFiles, maxTotalDiffLines: context.config.maxDiffSize, maxHunks: context.config.maxHunks, hunkContextLines: context.config.hunkContextLines } as ReviewLimits
+          : limitsFromConfig(config),
       })
     );
     hunks = hunksResult;
     auditTimings.collectDiffsMs = diffMs;
     logger.info({ hunks: hunks.length, diffMs }, "Collected diff hunks");
 
-    const minSeverity = config.REVIEW_MIN_SEVERITY ?? "low";
-    const strictness = config.REVIEW_STRICTNESS ?? "balanced";
+    const minSeverity = (context?.config.minSeverity ?? config.REVIEW_MIN_SEVERITY ?? "low") as "low" | "medium" | "high" | "critical";
+    const strictness = (context?.config.reviewStrictness ?? config.REVIEW_STRICTNESS ?? "balanced") as "relaxed" | "balanced" | "strict";
 
     const iteration = pr.lastMergeSourceCommit?.commitId;
     const codingStandardsText = [
@@ -145,7 +158,7 @@ export async function runReview(_args: {
             hunkText: hunk.hunkText,
             localContext: hunk.localContext,
             candidates: [],
-            tokenBudget: config.TOKEN_BUDGET_LLM1
+            tokenBudget: context?.config.tokenBudgetLlm1 ?? config.TOKEN_BUDGET_LLM1
           },
           timeoutMs: 60_000
         })
@@ -314,9 +327,11 @@ export async function runReview(_args: {
     logger.info({ totalFindings, skippedFindings, filteredCount, published: totalFindings - skippedFindings - filteredCount }, "Review done");
 
     // ── LLM4: Visual Accessibility ──
-    const llm4Enabled = config.LLM4_ENABLED === true && !!config.LLM4_PROVIDER;
+    const llm4Enabled = context
+      ? !!context.llmClients.llm4
+      : config.LLM4_ENABLED === true && !!config.LLM4_PROVIDER;
     if (llm4Enabled && previewUrl) {
-      const llm4 = createLLMClient(config, "llm4");
+      const llm4 = context?.llmClients.llm4 ?? createLLMClient(config, "llm4");
       logger.info({ previewUrl }, "Starting visual accessibility check");
 
       const { result: visualResult, ms: llm4Ms } = await withTiming(

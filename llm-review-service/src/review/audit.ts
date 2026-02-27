@@ -1,5 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { eq, and, desc, inArray } from "drizzle-orm";
+import type { DrizzleInstance } from "../db/connection";
+import { reviews, reviewFindings } from "../db/schema";
 
 export type AuditFinding = {
   issueType: string;
@@ -82,6 +85,117 @@ export function createInMemoryAuditStore(opts?: {
         )
         .slice(-limit)
         .reverse();
+    },
+  };
+}
+
+export function createDbAuditStore(
+  db: DrizzleInstance,
+  tenantId: string,
+): AuditStore {
+
+  return {
+    async append(record) {
+      await db.transaction(async (tx) => {
+        const reviewRow = await tx.insert(reviews).values({
+          tenantId,
+          repoId: record.repoId,
+          prId: record.prId,
+          status: record.status === "success" ? "completed" : "failed",
+          sourceCommit: record.sourceCommit,
+          targetCommit: record.targetCommit,
+          changedFiles: record.changedFiles,
+          hunksProcessed: record.hunksProcessed,
+          timings: record.timings,
+          error: record.error,
+          startedAt: new Date(record.startedAt),
+          completedAt: new Date(record.completedAt),
+        }).returning({ id: reviews.id });
+
+        const reviewId = reviewRow[0].id;
+
+        if (record.findings.length > 0) {
+          await tx.insert(reviewFindings).values(
+            record.findings.map((f) => ({
+              reviewId,
+              issueType: f.issueType,
+              severity: f.severity,
+              filePath: f.filePath,
+              startLine: f.startLine,
+              endLine: f.endLine,
+              message: f.message,
+              suggestion: f.suggestion,
+              findingHash: f.findingHash,
+              status: f.status,
+            })),
+          );
+        }
+      });
+    },
+
+    async query(filter) {
+      const conditions = [
+        eq(reviews.tenantId, tenantId),
+        eq(reviews.repoId, filter.repoId),
+      ];
+      if (filter.prId !== undefined) {
+        conditions.push(eq(reviews.prId, filter.prId));
+      }
+
+      const limit = filter.limit ?? 50;
+      const rows = await db
+        .select()
+        .from(reviews)
+        .where(and(...conditions))
+        .orderBy(desc(reviews.createdAt))
+        .limit(limit);
+
+      if (rows.length === 0) return [];
+
+      // Batch-fetch all findings for returned reviews (HIGH-1: avoid N+1)
+      const reviewIds = rows.map((r) => r.id);
+      const allFindings = await db
+        .select()
+        .from(reviewFindings)
+        .where(inArray(reviewFindings.reviewId, reviewIds));
+
+      const findingsByReview = new Map<string, typeof allFindings>();
+      for (const f of allFindings) {
+        const list = findingsByReview.get(f.reviewId) ?? [];
+        list.push(f);
+        findingsByReview.set(f.reviewId, list);
+      }
+
+      return rows.map((row) => {
+        const findings = findingsByReview.get(row.id) ?? [];
+        return {
+          id: row.id,
+          requestId: undefined,
+          repoId: row.repoId,
+          prId: row.prId,
+          sourceCommit: row.sourceCommit ?? undefined,
+          targetCommit: row.targetCommit ?? undefined,
+          changedFiles: (row.changedFiles as string[]) ?? [],
+          hunksProcessed: row.hunksProcessed ?? 0,
+          hunkResults: [],
+          findings: findings.map((f) => ({
+            issueType: f.issueType,
+            severity: f.severity,
+            filePath: f.filePath,
+            startLine: f.startLine,
+            endLine: f.endLine,
+            message: f.message,
+            suggestion: f.suggestion ?? undefined,
+            findingHash: f.findingHash,
+            status: f.status as AuditFinding["status"],
+          })),
+          timings: (row.timings as AuditRecord["timings"]) ?? { totalMs: 0, fetchPrMs: 0, listChangesMs: 0, collectDiffsMs: 0 },
+          status: row.status === "completed" ? "success" : "failure",
+          error: row.error ?? undefined,
+          startedAt: row.startedAt?.toISOString() ?? row.createdAt.toISOString(),
+          completedAt: row.completedAt?.toISOString() ?? row.createdAt.toISOString(),
+        };
+      });
     },
   };
 }
