@@ -2,6 +2,8 @@ import type { AdoCreateThreadRequest } from "./adoTypes";
 import type { Finding } from "../llm/types";
 import type { VisualA11yFinding } from "../llm/visualAccessibilityChecker";
 
+const BOT_HEADER = "**Marvin The Paranoid Android**\n\n";
+
 function ensureLeadingSlash(path: string) {
   return path.startsWith("/") ? path : `/${path}`;
 }
@@ -27,7 +29,7 @@ export function findingToAdoThread(finding: Finding): AdoCreateThreadRequest {
       {
         parentCommentId: 0,
         commentType: 1,
-        content: contentLines.join("\n")
+        content: BOT_HEADER + contentLines.join("\n")
       }
     ],
     threadContext: {
@@ -51,7 +53,7 @@ export function visualFindingToAdoThread(finding: VisualA11yFinding): AdoCreateT
   ].filter(Boolean).join("\n");
 
   return {
-    comments: [{ parentCommentId: 0, commentType: 1, content }],
+    comments: [{ parentCommentId: 0, commentType: 1, content: BOT_HEADER + content }],
     status: 1,
   };
 }
