@@ -7,10 +7,14 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-llmreview}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-llmreview}
       REDIS_URL: redis://redis:6379
+      AXON_SIDECAR_URL: http://axon-sidecar:8100
+      AXON_ENABLED: "${AXON_ENABLED:-false}"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      axon-sidecar:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1))"]
@@ -18,6 +22,22 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  axon-sidecar:
+    build: ./src/axon-sidecar
+    volumes:
+      - axon_data:/data
+    environment:
+      DATA_DIR: /data
+      LOG_LEVEL: ${AXON_LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8100/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    ports:
+      - "127.0.0.1:8100:8100"
 
   postgres:
     image: postgres:16-alpine
@@ -47,3 +67,4 @@ services:
 
 volumes:
   pgdata:
+  axon_data:

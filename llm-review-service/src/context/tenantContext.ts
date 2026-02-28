@@ -5,8 +5,7 @@ import type { TokenManager } from "../auth/tokenManager";
 import { AdoClient } from "../azure/adoClient";
 import type { AdoAuth } from "../azure/adoClient";
 import type { LLMClient } from "../llm/types";
-import { createLLMClient } from "../llm/types";
-import type { Config } from "../config";
+import { createLlmRouter, loadLlmRouterConfig } from "../llm/llmRouter";
 import { createTenantRepo } from "../db/repos/tenantRepo";
 import { createConfigRepo } from "../db/repos/configRepo";
 import { createLogger } from "../logger";
@@ -43,6 +42,7 @@ export interface EffectiveReviewConfig {
   a11yFileExtensions: string[];
   fileIncludeGlob?: string;
   fileExcludeGlob?: string;
+  enableAxon: boolean;
 }
 
 export async function buildTenantContext(
@@ -50,6 +50,7 @@ export async function buildTenantContext(
   db: DrizzleInstance,
   appConfig: AppConfig,
   tokenManager: TokenManager,
+  encryptionKey?: Buffer,
 ): Promise<TenantContext> {
   const tenantRepo = createTenantRepo(db);
   const configRepo = createConfigRepo(db);
@@ -104,15 +105,16 @@ export async function buildTenantContext(
     a11yFileExtensions: [".html", ".jsx", ".tsx", ".vue", ".svelte", ".css", ".scss"],
     fileIncludeGlob: tenantConfig?.fileIncludeGlob ?? undefined,
     fileExcludeGlob: tenantConfig?.fileExcludeGlob ?? undefined,
+    enableAxon: false, // Resolved per-repo by configResolver
   };
 
-  // Build LLM clients - use managed (app-level) keys for now
-  // TODO(Phase 2): Replace with LLM Router for proper provider routing
-  const llmConfig = buildLlmConfigFromApp(appConfig);
-  const llm1 = createLLMClient(llmConfig, "llm1");
-  const llm2 = createLLMClient(llmConfig, "llm2");
-  const llm3 = llmConfig.LLM3_ENABLED ? createLLMClient(llmConfig, "llm3") : undefined;
-  const llm4 = llmConfig.LLM4_ENABLED ? createLLMClient(llmConfig, "llm4") : undefined;
+  // Build LLM clients via LLM Router (supports managed + BYOK)
+  const routerConfig = await loadLlmRouterConfig(db, tenantId);
+  const router = createLlmRouter(appConfig, routerConfig, encryptionKey, logger);
+  const llm1 = router.getClient("llm1");
+  const llm2 = router.getClient("llm2");
+  const llm3 = routerConfig.llmMode === "byok" ? router.getClient("llm3") : undefined;
+  const llm4 = routerConfig.llmMode === "byok" ? router.getClient("llm4") : undefined;
 
   return {
     tenantId,
@@ -122,18 +124,4 @@ export async function buildTenantContext(
     llmClients: { llm1, llm2, llm3, llm4 },
     logger,
   };
-}
-
-// MED-2: Use a proper adapter instead of double type cast
-function buildLlmConfigFromApp(appConfig: AppConfig): Config {
-  // Bridge from AppConfig to existing Config for LLM client factory
-  // In Phase 2, this will be replaced by the LLM Router
-  const config: Record<string, unknown> = {
-    ...appConfig,
-    LLM1_PROVIDER: "mock",
-    LLM2_PROVIDER: "mock",
-    LLM3_ENABLED: false,
-    LLM4_ENABLED: false,
-  };
-  return config as Config;
 }
