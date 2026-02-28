@@ -4,6 +4,9 @@ import { registerTenantRoutes } from "./tenants";
 import { registerConfigRoutes } from "./config";
 import { registerProjectRoutes } from "./projects";
 import { registerReviewRoutes } from "./reviews";
+import { registerRepoConfigRoutes } from "./repoConfig";
+import { registerLlmConfigRoutes } from "./llmConfig";
+import { registerUsageRoutes } from "./usage";
 import type { AppConfig } from "../../config/appConfig";
 import type { DrizzleInstance } from "../../db/connection";
 import type { TokenManager } from "../../auth/tokenManager";
@@ -14,8 +17,9 @@ export const registerApiRoutes: FastifyPluginAsync<{
   db: DrizzleInstance;
   tokenManager: TokenManager;
   queue: ReviewQueue;
+  encryptionKey?: Buffer;
 }> = async (app, opts) => {
-  const { appConfig, db, tokenManager, queue } = opts;
+  const { appConfig, db, tokenManager, queue, encryptionKey } = opts;
 
   // Apply ADO auth middleware to all /api routes
   await app.register(adoAuthMiddleware, { appConfig, db });
@@ -24,4 +28,7 @@ export const registerApiRoutes: FastifyPluginAsync<{
   await app.register(registerConfigRoutes, { db });
   await app.register(registerProjectRoutes, { db, appConfig, tokenManager });
   await app.register(registerReviewRoutes, { db, queue });
+  await app.register(registerRepoConfigRoutes, { db });
+  await app.register(registerLlmConfigRoutes, { db, encryptionKey });
+  await app.register(registerUsageRoutes, { db });
 };

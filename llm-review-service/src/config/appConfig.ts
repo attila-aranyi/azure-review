@@ -61,6 +61,21 @@ export const appConfigSchema = z
     AZURE_OPENAI_ENDPOINT: optionalNonEmpty(),
     AZURE_OPENAI_API_KEY: optionalNonEmpty(),
 
+    // Axon sidecar
+    AXON_ENABLED: z.preprocess(
+      (v) => {
+        if (v === undefined) return false;
+        if (typeof v === "boolean") return v;
+        if (typeof v === "string") {
+          const lower = v.trim().toLowerCase();
+          return lower === "true" || lower === "1" || lower === "yes";
+        }
+        return Boolean(v);
+      },
+      z.boolean().default(false)
+    ),
+    AXON_SIDECAR_URL: optionalNonEmpty(),
+
     // Audit
     AUDIT_ENABLED: z.preprocess(
       (v) => {

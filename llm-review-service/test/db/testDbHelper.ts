@@ -151,6 +151,64 @@ export async function setupTestDb(): Promise<DrizzleInstance> {
   `);
 
   await testDb.execute(sql`
+    CREATE TABLE IF NOT EXISTS repo_configs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      ado_repo_id VARCHAR(255) NOT NULL,
+      ado_repo_name VARCHAR(255),
+      review_strictness VARCHAR(50),
+      max_files INTEGER,
+      max_diff_size INTEGER,
+      file_include_glob TEXT,
+      file_exclude_glob TEXT,
+      enable_a11y_text BOOLEAN,
+      enable_a11y_visual BOOLEAN,
+      enable_security BOOLEAN,
+      comment_style VARCHAR(50),
+      min_severity VARCHAR(50),
+      enable_axon BOOLEAN,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await testDb.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS repo_configs_tenant_repo_unique ON repo_configs (tenant_id, ado_repo_id)
+  `);
+
+  await testDb.execute(sql`
+    CREATE INDEX IF NOT EXISTS repo_configs_tenant_id_idx ON repo_configs (tenant_id)
+  `);
+
+  await testDb.execute(sql`
+    CREATE TABLE IF NOT EXISTS repo_indexes (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      ado_repo_id VARCHAR(255) NOT NULL,
+      ado_repo_name VARCHAR(255),
+      status VARCHAR(50) NOT NULL DEFAULT 'pending',
+      last_indexed_at TIMESTAMPTZ,
+      last_commit_sha VARCHAR(40),
+      symbols_count INTEGER,
+      edges_count INTEGER,
+      clusters_count INTEGER,
+      index_duration_ms INTEGER,
+      error_message TEXT,
+      graph_size_bytes INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await testDb.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS repo_indexes_tenant_repo_unique ON repo_indexes (tenant_id, ado_repo_id)
+  `);
+
+  await testDb.execute(sql`
+    CREATE INDEX IF NOT EXISTS repo_indexes_tenant_id_idx ON repo_indexes (tenant_id)
+  `);
+
+  await testDb.execute(sql`
     CREATE TABLE IF NOT EXISTS review_findings (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       review_id UUID NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
@@ -172,11 +230,62 @@ export async function setupTestDb(): Promise<DrizzleInstance> {
     CREATE INDEX IF NOT EXISTS review_findings_review_id_idx ON review_findings (review_id)
   `);
 
+  await testDb.execute(sql`
+    CREATE TABLE IF NOT EXISTS usage_daily (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      date TIMESTAMPTZ NOT NULL,
+      review_count INTEGER NOT NULL DEFAULT 0,
+      findings_count INTEGER NOT NULL DEFAULT 0,
+      tokens_used INTEGER NOT NULL DEFAULT 0,
+      llm_cost_cents INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await testDb.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS usage_daily_tenant_date_unique ON usage_daily (tenant_id, date)
+  `);
+
+  await testDb.execute(sql`
+    CREATE TABLE IF NOT EXISTS plan_limits (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      plan VARCHAR(50) NOT NULL,
+      max_reviews_per_month INTEGER NOT NULL,
+      max_tokens_per_month INTEGER NOT NULL,
+      max_files_per_review INTEGER NOT NULL,
+      max_repos_per_org INTEGER NOT NULL,
+      rate_limit_per_minute INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await testDb.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS plan_limits_plan_unique ON plan_limits (plan)
+  `);
+
+  await testDb.execute(sql`
+    CREATE TABLE IF NOT EXISTS review_feedback (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      finding_id UUID NOT NULL REFERENCES review_findings(id) ON DELETE CASCADE,
+      tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      ado_user_id VARCHAR(255),
+      vote VARCHAR(10) NOT NULL,
+      comment TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await testDb.execute(sql`
+    CREATE INDEX IF NOT EXISTS review_feedback_finding_id_idx ON review_feedback (finding_id)
+  `);
+
   return testDb;
 }
 
 export async function truncateAll(testDb: DrizzleInstance): Promise<void> {
-  await testDb.execute(sql`TRUNCATE review_findings, reviews, project_enrollments, tenant_configs, tenant_oauth_tokens, tenants CASCADE`);
+  await testDb.execute(sql`TRUNCATE review_feedback, review_findings, reviews, repo_configs, repo_indexes, usage_daily, plan_limits, project_enrollments, tenant_configs, tenant_oauth_tokens, tenants CASCADE`);
 }
 
 export async function teardownTestDb(): Promise<void> {

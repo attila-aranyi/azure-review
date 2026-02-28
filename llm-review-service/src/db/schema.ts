@@ -89,6 +89,91 @@ export const reviews = pgTable("reviews", {
   index("reviews_repo_pr_idx").on(table.repoId, table.prId),
 ]);
 
+export const repoConfigs = pgTable("repo_configs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  adoRepoId: varchar("ado_repo_id", { length: 255 }).notNull(),
+  adoRepoName: varchar("ado_repo_name", { length: 255 }),
+  reviewStrictness: varchar("review_strictness", { length: 50 }),
+  maxFiles: integer("max_files"),
+  maxDiffSize: integer("max_diff_size"),
+  fileIncludeGlob: text("file_include_glob"),
+  fileExcludeGlob: text("file_exclude_glob"),
+  enableA11yText: boolean("enable_a11y_text"),
+  enableA11yVisual: boolean("enable_a11y_visual"),
+  enableSecurity: boolean("enable_security"),
+  commentStyle: varchar("comment_style", { length: 50 }),
+  minSeverity: varchar("min_severity", { length: 50 }),
+  enableAxon: boolean("enable_axon"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("repo_configs_tenant_repo_unique").on(table.tenantId, table.adoRepoId),
+  index("repo_configs_tenant_id_idx").on(table.tenantId),
+]);
+
+export const repoIndexes = pgTable("repo_indexes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  adoRepoId: varchar("ado_repo_id", { length: 255 }).notNull(),
+  adoRepoName: varchar("ado_repo_name", { length: 255 }),
+  status: varchar("status", { length: 50 }).notNull().default("pending"),
+  lastIndexedAt: timestamp("last_indexed_at", { withTimezone: true }),
+  lastCommitSha: varchar("last_commit_sha", { length: 40 }),
+  symbolsCount: integer("symbols_count"),
+  edgesCount: integer("edges_count"),
+  clustersCount: integer("clusters_count"),
+  indexDurationMs: integer("index_duration_ms"),
+  errorMessage: text("error_message"),
+  graphSizeBytes: integer("graph_size_bytes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("repo_indexes_tenant_repo_unique").on(table.tenantId, table.adoRepoId),
+  index("repo_indexes_tenant_id_idx").on(table.tenantId),
+]);
+
+export const usageDaily = pgTable("usage_daily", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  date: timestamp("date", { withTimezone: true }).notNull(),
+  reviewCount: integer("review_count").notNull().default(0),
+  findingsCount: integer("findings_count").notNull().default(0),
+  tokensUsed: integer("tokens_used").notNull().default(0),
+  llmCostCents: integer("llm_cost_cents").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("usage_daily_tenant_date_unique").on(table.tenantId, table.date),
+  index("usage_daily_tenant_id_idx").on(table.tenantId),
+]);
+
+export const planLimits = pgTable("plan_limits", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  plan: varchar("plan", { length: 50 }).notNull(),
+  maxReviewsPerMonth: integer("max_reviews_per_month").notNull(),
+  maxTokensPerMonth: integer("max_tokens_per_month").notNull(),
+  maxFilesPerReview: integer("max_files_per_review").notNull(),
+  maxReposPerOrg: integer("max_repos_per_org").notNull(),
+  rateLimitPerMinute: integer("rate_limit_per_minute").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("plan_limits_plan_unique").on(table.plan),
+]);
+
+export const reviewFeedback = pgTable("review_feedback", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  findingId: uuid("finding_id").notNull().references(() => reviewFindings.id, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  adoUserId: varchar("ado_user_id", { length: 255 }),
+  vote: varchar("vote", { length: 10 }).notNull(), // 'up' | 'down'
+  comment: text("comment"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("review_feedback_finding_id_idx").on(table.findingId),
+  index("review_feedback_tenant_id_idx").on(table.tenantId),
+]);
+
 export const reviewFindings = pgTable("review_findings", {
   id: uuid("id").primaryKey().defaultRandom(),
   reviewId: uuid("review_id").notNull().references(() => reviews.id, { onDelete: "cascade" }),
