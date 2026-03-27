@@ -9,6 +9,7 @@ import { registerLlmConfigRoutes } from "./llmConfig";
 import { registerUsageRoutes } from "./usage";
 import { registerRulesRoutes } from "./rules";
 import { registerAuditExportRoutes } from "./auditExport";
+import { registerGraphRoutes } from "./graph";
 import type { AppConfig } from "../../config/appConfig";
 import type { DrizzleInstance } from "../../db/connection";
 import type { TokenManager } from "../../auth/tokenManager";
@@ -35,4 +36,5 @@ export const registerApiRoutes: FastifyPluginAsync<{
   await app.register(registerUsageRoutes, { db });
   await app.register(registerRulesRoutes, { db });
   await app.register(registerAuditExportRoutes, { db });
+  await app.register(registerGraphRoutes, { db, appConfig });
 };
