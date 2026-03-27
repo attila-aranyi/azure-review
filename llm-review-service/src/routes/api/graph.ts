@@ -27,7 +27,7 @@ export const registerGraphRoutes: FastifyPluginAsync<{
     return new AxonClient({ baseUrl: axonUrl!, logger: app.log as never });
   }
 
-  // GET /api/repos/:repoId/graph — Get repo status + context for graph visualization
+  // GET /api/repos/:repoId/graph — Get repo index status
   app.get<{ Params: { repoId: string } }>("/repos/:repoId/graph", async (request, reply) => {
     const tenantId = request.tenantId;
     if (!tenantId) return reply.code(401).send({ error: "Unauthorized" });
@@ -38,19 +38,14 @@ export const registerGraphRoutes: FastifyPluginAsync<{
       if (!status?.indexed) {
         return reply.code(404).send({ error: "Repository not indexed. Trigger a review first." });
       }
-
-      // Return status info — full graph data comes from individual symbol queries
-      return {
-        indexed: true,
-        graphSizeBytes: status.graph_size_bytes,
-      };
+      return { indexed: true, graphSizeBytes: status.graph_size_bytes };
     } catch (err) {
       app.log.warn({ err, repoId: request.params.repoId }, "Axon graph fetch failed");
       return reply.code(502).send({ error: "Failed to fetch graph from Axon sidecar" });
     }
   });
 
-  // GET /api/repos/:repoId/graph/impact/:symbol — Get impact analysis for a symbol
+  // GET /api/repos/:repoId/graph/impact/:symbol — Get impact analysis
   app.get<{ Params: { repoId: string; symbol: string } }>("/repos/:repoId/graph/impact/:symbol", async (request, reply) => {
     const tenantId = request.tenantId;
     if (!tenantId) return reply.code(401).send({ error: "Unauthorized" });
@@ -61,8 +56,6 @@ export const registerGraphRoutes: FastifyPluginAsync<{
       if (!impact) {
         return reply.code(404).send({ error: "Symbol not found or not indexed" });
       }
-
-      // Flatten blast_radius from { depth: entries[] } to flat array with depth
       const blastRadius: { id: string; label: string; depth: number }[] = [];
       for (const [depth, entries] of Object.entries(impact.blast_radius)) {
         for (const entry of entries) {
@@ -73,7 +66,6 @@ export const registerGraphRoutes: FastifyPluginAsync<{
           });
         }
       }
-
       return { symbol: request.params.symbol, blastRadius };
     } catch (err) {
       app.log.warn({ err, symbol: request.params.symbol }, "Axon impact fetch failed");
