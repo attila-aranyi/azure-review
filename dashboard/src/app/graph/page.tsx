@@ -200,6 +200,19 @@ function GraphContent() {
               </div>
             </div>
           </Card>
+        ) : error.includes("404") || error.includes("not indexed") ? (
+          <Card className="bg-zinc-900 border-zinc-800 ring-0">
+            <div className="flex items-center gap-3 py-4">
+              <GitBranch className="h-8 w-8 text-zinc-600" />
+              <div>
+                <Text className="text-zinc-300 font-medium">Repository Not Indexed</Text>
+                <Text className="text-zinc-500 text-sm mt-1">
+                  This repository hasn't been indexed by Axon yet. Create a PR to trigger a review, which will
+                  automatically index the repository for code graph visualization.
+                </Text>
+              </div>
+            </div>
+          </Card>
         ) : (
           <p className="text-sm text-red-400">{error}</p>
         )
