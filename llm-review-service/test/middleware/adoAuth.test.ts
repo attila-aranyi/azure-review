@@ -16,6 +16,7 @@ function mockAppConfig(overrides?: Partial<AppConfig>): AppConfig {
     RATE_LIMIT_WINDOW_MS: 60000,
     DATABASE_URL: "postgresql://localhost:5432/test",
     DEPLOYMENT_MODE: "saas",
+    AXON_ENABLED: false,
     AUDIT_ENABLED: true,
     AUDIT_RETENTION_DAYS: 30,
     ...overrides,
@@ -69,15 +70,19 @@ describe.skipIf(!isDbAvailable())("adoAuthMiddleware (integration)", () => {
 
   async function buildTestApp(appConfig?: Partial<AppConfig>) {
     const app = Fastify({ logger: false });
+    // Register auth middleware at app level — decorators + hook are on the root instance
     await app.register(adoAuthMiddleware, {
       appConfig: mockAppConfig(appConfig),
       db,
       jwksCache: testJwksCache,
     });
+    // Route must be added AFTER middleware registration completes
+    // and at the same level so the hook applies
     app.get("/test", async (request) => ({
       tenantId: request.tenantId,
       adoUserId: request.adoUserId,
     }));
+    await app.ready();
     return app;
   }
 

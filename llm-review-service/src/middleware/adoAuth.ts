@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
+import fp from "fastify-plugin";
 import * as jose from "jose";
 import type { AppConfig } from "../config/appConfig";
 import type { DrizzleInstance } from "../db/connection";
@@ -32,7 +33,7 @@ export class JwksCache {
   }
 }
 
-export const adoAuthMiddleware: FastifyPluginAsync<{
+const adoAuthMiddlewareImpl: FastifyPluginAsync<{
   appConfig: AppConfig;
   db: DrizzleInstance;
   jwksCache?: JwksCache;
@@ -135,3 +136,7 @@ export const adoAuthMiddleware: FastifyPluginAsync<{
     }
   });
 };
+
+export const adoAuthMiddleware = fp(adoAuthMiddlewareImpl, {
+  name: "adoAuthMiddleware",
+});

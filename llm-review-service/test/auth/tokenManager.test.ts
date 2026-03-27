@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { TokenManager } from "../../src/auth/tokenManager";
-import { generateKey, encrypt } from "../../src/auth/encryption";
+import { generateKey } from "../../src/auth/encryption";
 import type { DrizzleInstance } from "../../src/db/connection";
 import { setupTestDb, truncateAll, teardownTestDb, isDbAvailable } from "../db/testDbHelper";
 import { createTenantRepo } from "../../src/db/repos/tenantRepo";
@@ -9,8 +9,6 @@ import { createTenantRepo } from "../../src/db/repos/tenantRepo";
 vi.mock("undici", () => ({
   request: vi.fn(),
 }));
-
-import { request as mockRequest } from "undici";
 
 describe.skipIf(!isDbAvailable())("TokenManager (integration)", () => {
   let db: DrizzleInstance;

@@ -124,7 +124,7 @@ describe.skipIf(!isDbAvailable())("Multi-tenant webhook route (integration)", ()
     expect(res.statusCode).toBe(202);
   });
 
-  it("returns 404 for unknown tenantId", async () => {
+  it("returns 401 for unknown tenantId (anti-enumeration)", async () => {
     const fakeId = "00000000-0000-0000-0000-000000000000";
     const res = await app.inject({
       method: "POST",
@@ -132,10 +132,10 @@ describe.skipIf(!isDbAvailable())("Multi-tenant webhook route (integration)", ()
       headers: { "x-webhook-secret": webhookSecret },
       payload: validPayload,
     });
-    expect(res.statusCode).toBe(404);
+    expect(res.statusCode).toBe(401);
   });
 
-  it("returns 404 for inactive tenant", async () => {
+  it("returns 401 for inactive tenant (anti-enumeration)", async () => {
     const tenantRepo = createTenantRepo(db);
     await tenantRepo.updateStatus(tenantId, "inactive");
 
@@ -145,7 +145,7 @@ describe.skipIf(!isDbAvailable())("Multi-tenant webhook route (integration)", ()
       headers: { "x-webhook-secret": webhookSecret },
       payload: validPayload,
     });
-    expect(res.statusCode).toBe(404);
+    expect(res.statusCode).toBe(401);
   });
 
   it("returns 401 with wrong secret", async () => {

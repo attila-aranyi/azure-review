@@ -1,4 +1,4 @@
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { DrizzleInstance } from "../connection";
 import { reviewFeedback } from "../schema";
 

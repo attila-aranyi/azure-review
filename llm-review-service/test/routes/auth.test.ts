@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import Fastify from "fastify";
 import { registerAuthRoutes } from "../../src/routes/auth";
 import { TokenManager } from "../../src/auth/tokenManager";
@@ -21,6 +21,7 @@ function mockAppConfig(): AppConfig {
     OAUTH_CLIENT_SECRET: "test-client-secret",
     OAUTH_REDIRECT_URI: "https://example.com/callback",
     TOKEN_ENCRYPTION_KEY: "a".repeat(32),
+    AXON_ENABLED: false,
     AUDIT_ENABLED: true,
     AUDIT_RETENTION_DAYS: 30,
   } as AppConfig;
@@ -115,7 +116,19 @@ describe.skipIf(!isDbAvailable())("Auth routes (integration)", () => {
   });
 
   it("/connection DELETE revokes tokens and disables tenant", async () => {
-    const app = await buildTestApp();
+    // Use self-hosted mode so the DELETE auth can use a simple API key
+    const selfHostedConfig: AppConfig = {
+      ...mockAppConfig(),
+      DEPLOYMENT_MODE: "self-hosted",
+      ADO_PAT: "test-api-key",
+    };
+    const app = Fastify({ logger: false });
+    await app.register(registerAuthRoutes, {
+      appConfig: selfHostedConfig,
+      db,
+      tokenManager,
+    });
+
     const tenantRepo = createTenantRepo(db);
     const tenant = await tenantRepo.create({ adoOrgId: "revoke-test-org" });
     await tokenManager.storeTokens(tenant.id, {
@@ -127,6 +140,7 @@ describe.skipIf(!isDbAvailable())("Auth routes (integration)", () => {
     const res = await app.inject({
       method: "DELETE",
       url: `/auth/ado/connection/${tenant.id}`,
+      headers: { Authorization: "Bearer test-api-key" },
     });
 
     expect(res.statusCode).toBe(200);

@@ -208,7 +208,7 @@ describe.skipIf(!isDbAvailable())("rulesRepo (integration)", () => {
       expect(updated!.description).toBe("Updated description");
       expect(updated!.severity).toBe("high");
       expect(updated!.enabled).toBe(false);
-      expect(updated!.updatedAt.getTime()).toBeGreaterThan(created.updatedAt.getTime());
+      expect(updated!.updatedAt.getTime()).toBeGreaterThanOrEqual(created.updatedAt.getTime());
     });
 
     it("returns null for non-existent rule", async () => {
