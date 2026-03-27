@@ -91,4 +91,36 @@ describe("PlanEnforcer", () => {
       tokensUsed: 1000,
     });
   });
+
+  it("allows at one below review limit (49/50)", async () => {
+    mockFindById.mockResolvedValue({ id: "t1", plan: "free" });
+    mockGetPlanLimits.mockResolvedValue({ maxReviewsPerMonth: 50, maxTokensPerMonth: 100000 });
+    mockGetMonthlyUsage.mockResolvedValue({ reviewCount: 49, tokensUsed: 5000 });
+
+    const enforcer = createPlanEnforcer({} as never, logger);
+    const result = await enforcer.checkReviewAllowed("t1");
+    expect(result.allowed).toBe(true);
+  });
+
+  it("allows at one below token limit (99999/100000)", async () => {
+    mockFindById.mockResolvedValue({ id: "t1", plan: "free" });
+    mockGetPlanLimits.mockResolvedValue({ maxReviewsPerMonth: 1000, maxTokensPerMonth: 100000 });
+    mockGetMonthlyUsage.mockResolvedValue({ reviewCount: 10, tokensUsed: 99999 });
+
+    const enforcer = createPlanEnforcer({} as never, logger);
+    const result = await enforcer.checkReviewAllowed("t1");
+    expect(result.allowed).toBe(true);
+  });
+
+  it("reports review limit first when both exceeded", async () => {
+    mockFindById.mockResolvedValue({ id: "t1", plan: "free" });
+    mockGetPlanLimits.mockResolvedValue({ maxReviewsPerMonth: 50, maxTokensPerMonth: 100000 });
+    mockGetMonthlyUsage.mockResolvedValue({ reviewCount: 50, tokensUsed: 100000 });
+
+    const enforcer = createPlanEnforcer({} as never, logger);
+    const result = await enforcer.checkReviewAllowed("t1");
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain("review limit");
+    expect(result.reason).not.toContain("token");
+  });
 });

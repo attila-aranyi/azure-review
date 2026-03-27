@@ -128,4 +128,89 @@ describe("enrichReview", () => {
     expect(client.getImpact).toHaveBeenCalledTimes(5);
     expect(client.getContext).toHaveBeenCalledTimes(5);
   });
+
+  it("skips impact when getImpact returns null", async () => {
+    const client = mockAxonClient({
+      getImpact: vi.fn().mockResolvedValue(null) as never,
+    });
+    const result = await enrichReview(client, baseOpts);
+
+    expect(result).not.toBeNull();
+    expect(result!.impactBySymbol.size).toBe(0);
+    // context should still be populated
+    expect(result!.contextBySymbol.size).toBe(2);
+  });
+
+  it("skips context when getContext returns null", async () => {
+    const client = mockAxonClient({
+      getContext: vi.fn().mockResolvedValue(null) as never,
+    });
+    const result = await enrichReview(client, baseOpts);
+
+    expect(result).not.toBeNull();
+    expect(result!.contextBySymbol.size).toBe(0);
+    // impact should still be populated
+    expect(result!.impactBySymbol.size).toBe(2);
+  });
+
+  it("skips impact when blast_radius is missing", async () => {
+    const client = mockAxonClient({
+      getImpact: vi.fn().mockResolvedValue({ /* no blast_radius */ }) as never,
+    });
+    const result = await enrichReview(client, baseOpts);
+
+    expect(result).not.toBeNull();
+    expect(result!.impactBySymbol.size).toBe(0);
+  });
+
+  it("defaults deadCode to [] when getDeadCode returns null", async () => {
+    const client = mockAxonClient({
+      getDeadCode: vi.fn().mockResolvedValue(null) as never,
+    });
+    const result = await enrichReview(client, baseOpts);
+
+    expect(result).not.toBeNull();
+    expect(result!.deadCode).toEqual([]);
+  });
+
+  it("includes dead symbols from getDeadCode", async () => {
+    const client = mockAxonClient({
+      getDeadCode: vi.fn().mockResolvedValue({
+        dead_symbols: [{ file: "src/dead.ts", name: "unusedFn", type: "function" }],
+      }) as never,
+    });
+    const result = await enrichReview(client, baseOpts);
+
+    expect(result).not.toBeNull();
+    expect(result!.deadCode).toHaveLength(1);
+    expect(result!.deadCode[0].name).toBe("unusedFn");
+  });
+
+  it("returns null when reindex returns null", async () => {
+    const client = mockAxonClient({
+      getStatus: vi.fn().mockResolvedValue({ indexed: true, graph_size_bytes: 1024 }) as never,
+      reindexRepo: vi.fn().mockResolvedValue(null) as never,
+    });
+    const result = await enrichReview(client, baseOpts);
+
+    expect(result).toBeNull();
+  });
+
+  it("returns null when reindex returns status 'failed'", async () => {
+    const client = mockAxonClient({
+      getStatus: vi.fn().mockResolvedValue({ indexed: true, graph_size_bytes: 1024 }) as never,
+      reindexRepo: vi.fn().mockResolvedValue({ status: "failed", error: "timeout" }) as never,
+    });
+    const result = await enrichReview(client, baseOpts);
+
+    expect(result).toBeNull();
+  });
+
+  it("rejects when one symbol query fails in Promise.all", async () => {
+    const client = mockAxonClient({
+      getImpact: vi.fn().mockRejectedValue(new Error("network")) as never,
+    });
+
+    await expect(enrichReview(client, baseOpts)).rejects.toThrow("network");
+  });
 });
