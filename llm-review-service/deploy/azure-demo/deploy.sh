@@ -170,14 +170,14 @@ ok "Redis URL: $REDIS_URL"
 # ── 6. Build & Push Docker Image ────────────────────────
 step "6/8 — Build & Push Docker Image"
 
-info "Building image..."
-az acr build \
-  --registry "$ACR_NAME" \
-  --resource-group "$RESOURCE_GROUP" \
-  --image "${IMAGE_NAME}:latest" \
-  --file "$SERVICE_DIR/Dockerfile" \
-  "$SERVICE_DIR" \
-  -o none
+info "Logging in to ACR..."
+az acr login --name "$ACR_NAME" -o none
+
+info "Building image locally..."
+docker build -t "${ACR_SERVER}/${IMAGE_NAME}:latest" -f "$SERVICE_DIR/Dockerfile" "$SERVICE_DIR"
+
+info "Pushing image..."
+docker push "${ACR_SERVER}/${IMAGE_NAME}:latest"
 
 ok "Image pushed to ${ACR_SERVER}/${IMAGE_NAME}:latest"
 
