@@ -5,7 +5,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { api, type GraphData, type ImpactData, type DeadCodeData } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { Card, Text } from "@tremor/react";
-import { Search, Crosshair, Skull, RotateCcw } from "lucide-react";
+import { Search, Crosshair, Skull, RotateCcw, GitBranch } from "lucide-react";
 import dynamic from "next/dynamic";
 
 const CytoscapeComponent = dynamic(() => import("react-cytoscapejs"), { ssr: false });
@@ -186,7 +186,24 @@ function GraphContent() {
         </button>
       </div>
 
-      {error && <p className="text-sm text-red-400">{error}</p>}
+      {error && (
+        error.includes("503") || error.includes("not configured") ? (
+          <Card className="bg-zinc-900 border-zinc-800 ring-0">
+            <div className="flex items-center gap-3 py-4">
+              <GitBranch className="h-8 w-8 text-zinc-600" />
+              <div>
+                <Text className="text-zinc-300 font-medium">Axon Code Intelligence Not Configured</Text>
+                <Text className="text-zinc-500 text-sm mt-1">
+                  The Axon sidecar is required for code graph visualization. Enable it by setting AXON_ENABLED=true
+                  and deploying the axon-sidecar container.
+                </Text>
+              </div>
+            </div>
+          </Card>
+        ) : (
+          <p className="text-sm text-red-400">{error}</p>
+        )
+      )}
 
       {impact && (
         <Card className="bg-amber-900/20 border-amber-800/50 ring-0 py-2 px-4">
