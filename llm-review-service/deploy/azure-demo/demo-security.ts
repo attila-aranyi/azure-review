@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 9 — sidecar v3 with stderr logging
+// axon test 10 — sidecar v4 with 1CPU/2GB (was OOM at 0.5CPU/1GB)
