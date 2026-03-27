@@ -131,4 +131,124 @@ describe("LlmRouter", () => {
       expect(client.providerName).toBe("openai");
     });
   });
+
+  describe("managed mode provider priority", () => {
+    it("prefers anthropic when both API keys set", () => {
+      const router = createLlmRouter(
+        mockAppConfig({ ANTHROPIC_API_KEY: "sk-ant-key", OPENAI_API_KEY: "sk-oai-key" }),
+        { tenantId: "t1", llmMode: "managed" },
+        undefined,
+        logger,
+      );
+      const client = router.getClient("llm1");
+      expect(client.providerName).toBe("anthropic");
+    });
+  });
+
+  describe("BYOK azure_openai", () => {
+    it("creates azure_openai BYOK client with endpoint", () => {
+      const key = generateKey();
+      const encryptedKey = encrypt("az-api-key", key).toString("base64");
+
+      const router = createLlmRouter(
+        mockAppConfig(),
+        {
+          tenantId: "t1",
+          llmMode: "byok",
+          llmProvider: "azure_openai",
+          llmApiKeyEnc: encryptedKey,
+          llmEndpoint: "https://myorg.openai.azure.com",
+          llmModelReview: "gpt-4o",
+          llmModelA11y: "gpt-4-turbo",
+        },
+        key,
+        logger,
+      );
+
+      // llm1 should not throw (azure_openai is valid for llm1)
+      const client = router.getClient("llm1");
+      expect(client).toBeDefined();
+      expect(client.providerName).toBe("azure_openai");
+    });
+
+    it("passes llmEndpoint to azure_openai config", () => {
+      const key = generateKey();
+      const encryptedKey = encrypt("az-api-key", key).toString("base64");
+      const endpoint = "https://custom.openai.azure.com";
+
+      // The endpoint is validated inside createLLMClient → AzureOpenAIProvider
+      // If it wasn't passed, it would throw "Missing Azure OpenAI config"
+      const router = createLlmRouter(
+        mockAppConfig(),
+        {
+          tenantId: "t1",
+          llmMode: "byok",
+          llmProvider: "azure_openai",
+          llmApiKeyEnc: encryptedKey,
+          llmEndpoint: endpoint,
+          llmModelReview: "gpt-4o",
+        },
+        key,
+        logger,
+      );
+
+      expect(() => router.getClient("llm1")).not.toThrow();
+    });
+  });
+
+  describe("BYOK model selection per stage", () => {
+    function createByokRouter(models: { review?: string; a11y?: string }) {
+      const key = generateKey();
+      const encryptedKey = encrypt("sk-test", key).toString("base64");
+      return createLlmRouter(
+        mockAppConfig(),
+        {
+          tenantId: "t1",
+          llmMode: "byok",
+          llmProvider: "openai",
+          llmApiKeyEnc: encryptedKey,
+          llmModelReview: models.review,
+          llmModelA11y: models.a11y,
+        },
+        key,
+        logger,
+      );
+    }
+
+    it("uses llmModelReview for llm1 stage", () => {
+      const router = createByokRouter({ review: "gpt-4o-mini", a11y: "gpt-4-turbo" });
+      const client = router.getClient("llm1");
+      expect(client.modelName).toBe("gpt-4o-mini");
+    });
+
+    it("uses llmModelReview for llm2 stage", () => {
+      const router = createByokRouter({ review: "gpt-4o-mini", a11y: "gpt-4-turbo" });
+      const client = router.getClient("llm2");
+      expect(client.modelName).toBe("gpt-4o-mini");
+    });
+
+    it("uses llmModelA11y for llm3 stage", () => {
+      const router = createByokRouter({ review: "gpt-4o-mini", a11y: "gpt-4-turbo" });
+      const client = router.getClient("llm3");
+      expect(client.modelName).toBe("gpt-4-turbo");
+    });
+
+    it("uses llmModelA11y for llm4 stage", () => {
+      const router = createByokRouter({ review: "gpt-4o-mini", a11y: "gpt-4-turbo" });
+      const client = router.getClient("llm4");
+      expect(client.modelName).toBe("gpt-4-turbo");
+    });
+
+    it("defaults to gpt-4o when llmModelReview is null", () => {
+      const router = createByokRouter({ review: undefined, a11y: "gpt-4-turbo" });
+      const client = router.getClient("llm1");
+      expect(client.modelName).toBe("gpt-4o");
+    });
+
+    it("defaults to gpt-4o when llmModelA11y is null", () => {
+      const router = createByokRouter({ review: "gpt-4o-mini", a11y: undefined });
+      const client = router.getClient("llm3");
+      expect(client.modelName).toBe("gpt-4o");
+    });
+  });
 });
