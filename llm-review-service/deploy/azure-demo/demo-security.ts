@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 6 — fixed: resolve per-repo config (enableAxon) in webhook handler
+// axon test 7 — v18 deployed with per-repo config resolver fix
