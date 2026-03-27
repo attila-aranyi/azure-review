@@ -115,7 +115,19 @@ describe.skipIf(!isDbAvailable())("Auth routes (integration)", () => {
   });
 
   it("/connection DELETE revokes tokens and disables tenant", async () => {
-    const app = await buildTestApp();
+    // Use self-hosted mode so the DELETE auth can use a simple API key
+    const selfHostedConfig: AppConfig = {
+      ...mockAppConfig(),
+      DEPLOYMENT_MODE: "self-hosted",
+      ADO_PAT: "test-api-key",
+    };
+    const app = Fastify({ logger: false });
+    await app.register(registerAuthRoutes, {
+      appConfig: selfHostedConfig,
+      db,
+      tokenManager,
+    });
+
     const tenantRepo = createTenantRepo(db);
     const tenant = await tenantRepo.create({ adoOrgId: "revoke-test-org" });
     await tokenManager.storeTokens(tenant.id, {
@@ -127,6 +139,7 @@ describe.skipIf(!isDbAvailable())("Auth routes (integration)", () => {
     const res = await app.inject({
       method: "DELETE",
       url: `/auth/ado/connection/${tenant.id}`,
+      headers: { Authorization: "Bearer test-api-key" },
     });
 
     expect(res.statusCode).toBe(200);

@@ -249,6 +249,10 @@ export async function setupTestDb(): Promise<DrizzleInstance> {
   `);
 
   await testDb.execute(sql`
+    CREATE INDEX IF NOT EXISTS usage_daily_tenant_id_idx ON usage_daily (tenant_id)
+  `);
+
+  await testDb.execute(sql`
     CREATE TABLE IF NOT EXISTS plan_limits (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       plan VARCHAR(50) NOT NULL,
@@ -292,8 +296,19 @@ export async function setupTestDb(): Promise<DrizzleInstance> {
     CREATE INDEX IF NOT EXISTS review_rules_tenant_repo_idx ON review_rules (tenant_id, ado_repo_id)
   `);
 
+  // PostgreSQL treats NULLs as distinct in unique indexes, so we need
+  // a partial unique index for tenant-level rules (ado_repo_id IS NULL)
+  // plus the normal unique index for repo-level rules.
   await testDb.execute(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS review_rules_tenant_repo_name_unique ON review_rules (tenant_id, ado_repo_id, name)
+    CREATE UNIQUE INDEX IF NOT EXISTS review_rules_tenant_name_null_repo_unique
+    ON review_rules (tenant_id, name)
+    WHERE ado_repo_id IS NULL
+  `);
+
+  await testDb.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS review_rules_tenant_repo_name_unique
+    ON review_rules (tenant_id, ado_repo_id, name)
+    WHERE ado_repo_id IS NOT NULL
   `);
 
   await testDb.execute(sql`
@@ -310,6 +325,10 @@ export async function setupTestDb(): Promise<DrizzleInstance> {
 
   await testDb.execute(sql`
     CREATE INDEX IF NOT EXISTS review_feedback_finding_id_idx ON review_feedback (finding_id)
+  `);
+
+  await testDb.execute(sql`
+    CREATE INDEX IF NOT EXISTS review_feedback_tenant_id_idx ON review_feedback (tenant_id)
   `);
 
   return testDb;

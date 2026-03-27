@@ -16,6 +16,7 @@ function mockAppConfig(overrides?: Partial<AppConfig>): AppConfig {
     RATE_LIMIT_WINDOW_MS: 60000,
     DATABASE_URL: "postgresql://localhost:5432/test",
     DEPLOYMENT_MODE: "saas",
+    AXON_ENABLED: false,
     AUDIT_ENABLED: true,
     AUDIT_RETENTION_DAYS: 30,
     ...overrides,
@@ -69,15 +70,19 @@ describe.skipIf(!isDbAvailable())("adoAuthMiddleware (integration)", () => {
 
   async function buildTestApp(appConfig?: Partial<AppConfig>) {
     const app = Fastify({ logger: false });
-    await app.register(adoAuthMiddleware, {
-      appConfig: mockAppConfig(appConfig),
-      db,
-      jwksCache: testJwksCache,
+    // Register middleware and route in the same encapsulated scope
+    // so the onRequest hook applies to the route
+    await app.register(async (scope) => {
+      await scope.register(adoAuthMiddleware, {
+        appConfig: mockAppConfig(appConfig),
+        db,
+        jwksCache: testJwksCache,
+      });
+      scope.get("/test", async (request) => ({
+        tenantId: request.tenantId,
+        adoUserId: request.adoUserId,
+      }));
     });
-    app.get("/test", async (request) => ({
-      tenantId: request.tenantId,
-      adoUserId: request.adoUserId,
-    }));
     return app;
   }
 
