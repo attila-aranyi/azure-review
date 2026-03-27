@@ -23,6 +23,10 @@ import type { ReviewLimits } from "./limits";
 import { filterFindings } from "./severity";
 import type { AuditStore, AuditRecord, AuditFinding, AuditHunkResult } from "./audit";
 import type { TenantContext } from "../context/tenantContext";
+import { AxonClient } from "../axon/axonClient";
+import { enrichReview } from "../axon/contextEnricher";
+import { formatHunkContext } from "../axon/promptInjector";
+import type { StructuralContext } from "../axon/axonTypes";
 
 async function safeAdoCall<T>(fn: () => Promise<T>, logger: ReturnType<typeof createLogger>, label: string): Promise<T | undefined> {
   try {
@@ -139,6 +143,48 @@ export async function runReview(_args: {
     const minSeverity = (context?.config.minSeverity ?? config.REVIEW_MIN_SEVERITY ?? "low") as "low" | "medium" | "high" | "critical";
     const strictness = (context?.config.reviewStrictness ?? config.REVIEW_STRICTNESS ?? "balanced") as "relaxed" | "balanced" | "strict";
 
+    // ── Axon code intelligence (optional) ──
+    let structuralContext: StructuralContext | null = null;
+    const axonEnabled = context?.config.enableAxon && config.AXON_ENABLED !== false;
+    const axonUrl = process.env.AXON_SIDECAR_URL;
+
+    if (axonEnabled && axonUrl && pr) {
+      logger.info("Running Axon code intelligence enrichment");
+      try {
+        const axonClient = new AxonClient({ baseUrl: axonUrl, logger: logger as never });
+        const adoOrgUrl = context?.orgUrl ?? `https://dev.azure.com/${config.ADO_ORG}`;
+        const adoProject = config.ADO_PROJECT ?? "";
+        const cloneUrl = `${adoOrgUrl}/${adoProject}/_git/${repoId}`;
+        const targetBranch = pr.targetRefName?.replace("refs/heads/", "") ?? "main";
+        const fullDiff = hunks.map((h) => h.hunkText).join("\n");
+        const accessToken = config.ADO_PAT ?? "";
+
+        const { result: enrichResult, ms: axonMs } = await withTiming("axon-enrich", () =>
+          enrichReview(axonClient, {
+            tenantId: context?.tenantId ?? "default",
+            repoId,
+            cloneUrl,
+            accessToken,
+            targetBranch,
+            diff: fullDiff,
+            logger,
+          })
+        );
+
+        structuralContext = enrichResult;
+        if (structuralContext) {
+          logger.info(
+            { axonMs, changedSymbols: structuralContext.changedSymbols.length, deadCode: structuralContext.deadCode.length },
+            "Axon enrichment complete"
+          );
+        } else {
+          logger.info({ axonMs }, "Axon enrichment returned no data");
+        }
+      } catch (err) {
+        logger.warn({ err }, "Axon enrichment failed, proceeding without structural context");
+      }
+    }
+
     const iteration = pr.lastMergeSourceCommit?.commitId;
     const codingStandardsText = [
       "Be precise and actionable.",
@@ -164,13 +210,21 @@ export async function runReview(_args: {
         })
       );
 
-      const contextBundleText =
+      let contextBundleText =
         pre.selected.length === 0
           ? hunk.localContext
           : pre.selected
               .map((s) => `### ${s.source}:${s.id}\n${s.text}`)
               .join("\n\n")
               .trim();
+
+      // Inject Axon structural context for this hunk
+      if (structuralContext) {
+        const hunkAxonContext = formatHunkContext(structuralContext, hunk);
+        if (hunkAxonContext) {
+          contextBundleText = `${contextBundleText}\n\n${hunkAxonContext}`;
+        }
+      }
 
       const { result: review, ms: llm2Ms } = await withTiming("llm2-reviewer", () =>
         runReviewer({
