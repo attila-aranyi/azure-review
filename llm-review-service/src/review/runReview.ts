@@ -145,7 +145,7 @@ export async function runReview(_args: {
 
     // ── Axon code intelligence (optional) ──
     let structuralContext: StructuralContext | null = null;
-    const axonEnabled = context?.config.enableAxon && config.AXON_ENABLED !== false;
+    const axonEnabled = context?.config.enableAxon ?? false;
     const axonUrl = process.env.AXON_SIDECAR_URL;
 
     if (axonEnabled && axonUrl && pr) {

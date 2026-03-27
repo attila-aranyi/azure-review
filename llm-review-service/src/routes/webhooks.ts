@@ -214,7 +214,7 @@ export const registerWebhookRoutes: FastifyPluginAsync<{
           await opts.queue.enqueue({ repoId, prId, requestId: request.id, previewUrl, tenantId, adoProjectId });
         } else {
           // Sync mode: run review in background with tenant context for DB persistence
-          const timeoutMs = 120_000;
+          const timeoutMs = 300_000;
           setImmediate(() => {
             void (async () => {
               try {
