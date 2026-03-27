@@ -21,6 +21,7 @@ function mockAppConfig(): AppConfig {
     OAUTH_CLIENT_SECRET: "test-client-secret",
     OAUTH_REDIRECT_URI: "https://example.com/callback",
     TOKEN_ENCRYPTION_KEY: "a".repeat(32),
+    AXON_ENABLED: false,
     AUDIT_ENABLED: true,
     AUDIT_RETENTION_DAYS: 30,
   } as AppConfig;

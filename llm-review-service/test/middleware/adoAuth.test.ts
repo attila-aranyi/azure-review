@@ -70,19 +70,19 @@ describe.skipIf(!isDbAvailable())("adoAuthMiddleware (integration)", () => {
 
   async function buildTestApp(appConfig?: Partial<AppConfig>) {
     const app = Fastify({ logger: false });
-    // Register middleware and route in the same encapsulated scope
-    // so the onRequest hook applies to the route
-    await app.register(async (scope) => {
-      await scope.register(adoAuthMiddleware, {
-        appConfig: mockAppConfig(appConfig),
-        db,
-        jwksCache: testJwksCache,
-      });
-      scope.get("/test", async (request) => ({
-        tenantId: request.tenantId,
-        adoUserId: request.adoUserId,
-      }));
+    // Register auth middleware at app level — decorators + hook are on the root instance
+    await app.register(adoAuthMiddleware, {
+      appConfig: mockAppConfig(appConfig),
+      db,
+      jwksCache: testJwksCache,
     });
+    // Route must be added AFTER middleware registration completes
+    // and at the same level so the hook applies
+    app.get("/test", async (request) => ({
+      tenantId: request.tenantId,
+      adoUserId: request.adoUserId,
+    }));
+    await app.ready();
     return app;
   }
 
