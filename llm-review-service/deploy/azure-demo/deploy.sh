@@ -15,7 +15,8 @@ LOCATION="westeurope"
 PSQL_LOCATION="northeurope"  # Postgres may be restricted in some regions
 RESOURCE_GROUP="rg-code-review-demo"
 ACR_NAME="acrcodereviewdemo"
-CAE_NAME="cae-code-review-demo"
+CAE_NAME="cae-code-review"
+CAE_RESOURCE_GROUP="rg-code-review"  # Existing environment in a different RG
 CA_NAME="ca-llm-review-demo"
 CA_REDIS_NAME="ca-redis-demo"
 PSQL_SERVER="psql-code-review-demo"
@@ -132,16 +133,13 @@ ok "Database URL configured"
 # ── 4. Container Apps Environment ────────────────────────
 step "4/8 — Container Apps Environment"
 
-if az containerapp env show --name "$CAE_NAME" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
-  ok "Container Apps environment '$CAE_NAME' already exists"
+if az containerapp env show --name "$CAE_NAME" --resource-group "$CAE_RESOURCE_GROUP" &>/dev/null; then
+  ok "Reusing existing Container Apps environment '$CAE_NAME' in '$CAE_RESOURCE_GROUP'"
 else
-  az containerapp env create \
-    --name "$CAE_NAME" \
-    --resource-group "$RESOURCE_GROUP" \
-    --location "$LOCATION" \
-    -o none
-  ok "Created Container Apps environment '$CAE_NAME'"
+  fail "Container Apps environment '$CAE_NAME' not found in '$CAE_RESOURCE_GROUP'. Create it manually or update CAE_NAME/CAE_RESOURCE_GROUP."
 fi
+
+CAE_ID=$(az containerapp env show --name "$CAE_NAME" --resource-group "$CAE_RESOURCE_GROUP" --query id -o tsv)
 
 # ── 5. Redis Container ──────────────────────────────────
 step "5/8 — Redis Container"
@@ -152,7 +150,7 @@ else
   az containerapp create \
     --name "$CA_REDIS_NAME" \
     --resource-group "$RESOURCE_GROUP" \
-    --environment "$CAE_NAME" \
+    --environment "$CAE_ID" \
     --image redis:7-alpine \
     --cpu 0.25 \
     --memory 0.5Gi \
@@ -214,7 +212,7 @@ else
   az containerapp create \
     --name "$CA_NAME" \
     --resource-group "$RESOURCE_GROUP" \
-    --environment "$CAE_NAME" \
+    --environment "$CAE_ID" \
     --image "${ACR_SERVER}/${IMAGE_NAME}:latest" \
     --registry-server "$ACR_SERVER" \
     --registry-username "$ACR_USERNAME" \
