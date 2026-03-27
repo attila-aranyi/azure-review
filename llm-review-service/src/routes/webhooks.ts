@@ -203,13 +203,22 @@ export const registerWebhookRoutes: FastifyPluginAsync<{
 
         const previewUrl = body.previewUrl;
 
-        // CRIT-5: Multi-tenant mode requires queue
-        if (!opts.queue.enabled) {
-          app.log.error("Multi-tenant webhook requires queue (REDIS_URL)");
-          return reply.code(503).send({ ok: false, error: "Queue required for multi-tenant mode" });
+        if (opts.queue.enabled) {
+          await opts.queue.enqueue({ repoId, prId, requestId: request.id, previewUrl, tenantId, adoProjectId });
+        } else {
+          // Sync mode: run review in background (self-hosted without Redis)
+          const timeoutMs = 120_000;
+          setImmediate(() => {
+            void Promise.race([
+              runReview({ config: opts.config, repoId, prId, requestId: request.id, auditStore: opts.auditStore, previewUrl }),
+              new Promise<void>((_, reject) =>
+                setTimeout(() => reject(new Error("review timeout")), timeoutMs)
+              )
+            ]).catch((err) => {
+              app.log.error({ err, repoId, prId, tenantId }, "Review pipeline failed");
+            });
+          });
         }
-
-        await opts.queue.enqueue({ repoId, prId, requestId: request.id, previewUrl, tenantId, adoProjectId });
 
         return reply.code(202).send({ ok: true });
       },
