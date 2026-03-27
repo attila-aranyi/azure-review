@@ -3,13 +3,18 @@ import type { FastifyPluginAsync } from "fastify";
 import rateLimit from "@fastify/rate-limit";
 import { z } from "zod";
 import type { Config } from "../config";
+import type { AppConfig } from "../config/appConfig";
 import { runReview } from "../review/runReview";
 import type { ReviewQueue } from "../review/queue";
 import type { AuditStore } from "../review/audit";
+import { createDbAuditStore } from "../review/audit";
+import { createDbIdempotencyStore } from "../review/idempotency";
 import type { DrizzleInstance } from "../db/connection";
+import type { TokenManager } from "../auth/tokenManager";
 import { createTenantRepo } from "../db/repos/tenantRepo";
 import { createProjectRepo } from "../db/repos/projectRepo";
 import { decrypt } from "../auth/encryption";
+import { buildTenantContext } from "../context/tenantContext";
 
 function timingSafeEqual(a: string, b: string): boolean {
   const bufA = new Uint8Array(Buffer.from(a));
@@ -66,6 +71,8 @@ export const registerWebhookRoutes: FastifyPluginAsync<{
   auditStore?: AuditStore;
   db?: DrizzleInstance;
   encryptionKey?: Buffer;
+  appConfig?: AppConfig;
+  tokenManager?: TokenManager;
 }> = async (
   app,
   opts
@@ -206,17 +213,32 @@ export const registerWebhookRoutes: FastifyPluginAsync<{
         if (opts.queue.enabled) {
           await opts.queue.enqueue({ repoId, prId, requestId: request.id, previewUrl, tenantId, adoProjectId });
         } else {
-          // Sync mode: run review in background (self-hosted without Redis)
+          // Sync mode: run review in background with tenant context for DB persistence
           const timeoutMs = 120_000;
           setImmediate(() => {
-            void Promise.race([
-              runReview({ config: opts.config, repoId, prId, requestId: request.id, auditStore: opts.auditStore, previewUrl }),
-              new Promise<void>((_, reject) =>
-                setTimeout(() => reject(new Error("review timeout")), timeoutMs)
-              )
-            ]).catch((err) => {
-              app.log.error({ err, repoId, prId, tenantId }, "Review pipeline failed");
-            });
+            void (async () => {
+              try {
+                let context;
+                let tenantAuditStore = opts.auditStore;
+                let idempotencyStore;
+
+                // Build tenant context for DB persistence (same as queue worker)
+                if (tenantId && opts.db && opts.appConfig && opts.tokenManager) {
+                  context = await buildTenantContext(tenantId, opts.db, opts.appConfig, opts.tokenManager);
+                  tenantAuditStore = createDbAuditStore(opts.db, tenantId);
+                  idempotencyStore = createDbIdempotencyStore(opts.db, { tenantId });
+                }
+
+                await Promise.race([
+                  runReview({ config: opts.config, repoId, prId, requestId: request.id, auditStore: tenantAuditStore, previewUrl, context, idempotencyStore }),
+                  new Promise<void>((_, reject) =>
+                    setTimeout(() => reject(new Error("review timeout")), timeoutMs)
+                  )
+                ]);
+              } catch (err) {
+                app.log.error({ err, repoId, prId, tenantId }, "Review pipeline failed");
+              }
+            })();
           });
         }
 

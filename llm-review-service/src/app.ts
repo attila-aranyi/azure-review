@@ -69,6 +69,8 @@ export async function buildApp(args: BuildAppArgs) {
     auditStore,
     db: args.db,
     encryptionKey,
+    appConfig: args.appConfig,
+    tokenManager: args.tokenManager,
   });
 
   // Multi-tenant routes (only when DB + appConfig are provided)
