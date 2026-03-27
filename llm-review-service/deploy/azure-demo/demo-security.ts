@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 5 — rebuilt main service with diagnostic logging
+// axon test 6 — fixed: resolve per-repo config (enableAxon) in webhook handler

@@ -10,6 +10,7 @@ import { createDbAuditStore } from "./audit";
 import { createDbIdempotencyStore } from "./idempotency";
 import type { AuditStore } from "./audit";
 import { buildTenantContext } from "../context/tenantContext";
+import { createConfigResolver } from "../config/configResolver";
 
 export type ReviewJobPayload = {
   repoId: string;
@@ -57,6 +58,9 @@ export function createReviewQueue(config: Config, auditStore?: AuditStore, deps?
       // Multi-tenant: hydrate TenantContext when tenantId is present
       if (tenantId && deps?.db && deps.appConfig && deps.tokenManager) {
         const context = await buildTenantContext(tenantId, deps.db, deps.appConfig, deps.tokenManager);
+        // Resolve per-repo config overrides (e.g. enableAxon)
+        const resolver = createConfigResolver(deps.db);
+        context.config = await resolver.resolve(tenantId, repoId);
         const tenantAuditStore = createDbAuditStore(deps.db, tenantId);
         const idempotencyStore = createDbIdempotencyStore(deps.db, { tenantId });
         await runReview({ config, repoId, prId, requestId, auditStore: tenantAuditStore, previewUrl, context, idempotencyStore });

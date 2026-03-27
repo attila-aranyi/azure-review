@@ -15,6 +15,7 @@ import { createTenantRepo } from "../db/repos/tenantRepo";
 import { createProjectRepo } from "../db/repos/projectRepo";
 import { decrypt } from "../auth/encryption";
 import { buildTenantContext } from "../context/tenantContext";
+import { createConfigResolver } from "../config/configResolver";
 
 function timingSafeEqual(a: string, b: string): boolean {
   const bufA = new Uint8Array(Buffer.from(a));
@@ -225,6 +226,9 @@ export const registerWebhookRoutes: FastifyPluginAsync<{
                 // Build tenant context for DB persistence (same as queue worker)
                 if (tenantId && opts.db && opts.appConfig && opts.tokenManager) {
                   context = await buildTenantContext(tenantId, opts.db, opts.appConfig, opts.tokenManager);
+                  // Resolve per-repo config overrides (e.g. enableAxon)
+                  const resolver = createConfigResolver(opts.db);
+                  context.config = await resolver.resolve(tenantId, repoId);
                   tenantAuditStore = createDbAuditStore(opts.db, tenantId);
                   idempotencyStore = createDbIdempotencyStore(opts.db, { tenantId });
                 }
