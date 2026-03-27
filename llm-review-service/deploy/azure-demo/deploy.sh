@@ -205,6 +205,8 @@ if az containerapp show --name "$CA_NAME" --resource-group "$RESOURCE_GROUP" &>/
       "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}" \
       "LLM1_PROVIDER=anthropic" \
       "LLM2_PROVIDER=anthropic" \
+      "ANTHROPIC_MODEL_LLM1=claude-sonnet-4-20250514" \
+      "ANTHROPIC_MODEL_LLM2=claude-sonnet-4-20250514" \
       "PORT=3000" \
       "LOG_LEVEL=info" \
     -o none
@@ -235,6 +237,8 @@ else
       "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}" \
       "LLM1_PROVIDER=anthropic" \
       "LLM2_PROVIDER=anthropic" \
+      "ANTHROPIC_MODEL_LLM1=claude-sonnet-4-20250514" \
+      "ANTHROPIC_MODEL_LLM2=claude-sonnet-4-20250514" \
       "PORT=3000" \
       "LOG_LEVEL=info" \
     -o none
