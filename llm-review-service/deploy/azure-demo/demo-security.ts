@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 2 — enableAxon=true in repo config
+// axon test 3 — sidecar stable, re-trigger
