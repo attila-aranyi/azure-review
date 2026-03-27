@@ -156,11 +156,14 @@ export type Finding = {
 export type ReviewDetail = Review & { findings: Finding[] };
 
 export type UsageSummary = {
-  reviewCount: number;
-  findingsCount: number;
-  tokensUsed: number;
-  llmCostCents: number;
-  plan: { maxReviewsPerMonth: number; maxTokensPerMonth: number };
+  usage: {
+    reviewCount: number;
+    findingsCount: number;
+    tokensUsed: number;
+    llmCostCents: number;
+  };
+  limits: { maxReviewsPerMonth: number; maxTokensPerMonth: number } | null;
+  plan: string;
 };
 
 export type DailyUsage = {

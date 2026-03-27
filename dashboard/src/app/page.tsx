@@ -65,20 +65,20 @@ function DashboardContent() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard title="Reviews This Month" value={String(usage?.reviewCount ?? 0)} icon={Activity} />
-        <KpiCard title="Findings" value={String(usage?.findingsCount ?? 0)} icon={Bug} />
-        <KpiCard title="Tokens Used" value={usage ? `${Math.round(usage.tokensUsed / 1000)}k` : "0"} icon={Eye} />
-        <KpiCard title="LLM Cost" value={usage ? `$${(usage.llmCostCents / 100).toFixed(2)}` : "$0.00"} icon={Shield} />
+        <KpiCard title="Reviews This Month" value={String(usage?.usage.reviewCount ?? 0)} icon={Activity} />
+        <KpiCard title="Findings" value={String(usage?.usage.findingsCount ?? 0)} icon={Bug} />
+        <KpiCard title="Tokens Used" value={usage ? `${Math.round((usage.usage.tokensUsed ?? 0) / 1000)}k` : "0"} icon={Eye} />
+        <KpiCard title="LLM Cost" value={usage ? `$${((usage.usage.llmCostCents ?? 0) / 100).toFixed(2)}` : "$0.00"} icon={Shield} />
       </div>
 
-      {usage?.plan && (
+      {usage?.limits && (
         <Card className="bg-zinc-900 border-zinc-800 ring-0">
-          <Text className="text-zinc-400">Plan Usage</Text>
+          <Text className="text-zinc-400">Plan Usage ({usage.plan})</Text>
           <Flex className="mt-4">
-            <Text className="text-zinc-300">Reviews: {usage.reviewCount} / {usage.plan.maxReviewsPerMonth}</Text>
+            <Text className="text-zinc-300">Reviews: {usage.usage.reviewCount} / {usage.limits.maxReviewsPerMonth}</Text>
           </Flex>
           <ProgressBar
-            value={usage.plan.maxReviewsPerMonth > 0 ? (usage.reviewCount / usage.plan.maxReviewsPerMonth) * 100 : 0}
+            value={usage.limits.maxReviewsPerMonth > 0 ? (usage.usage.reviewCount / usage.limits.maxReviewsPerMonth) * 100 : 0}
             className="mt-2"
           />
         </Card>

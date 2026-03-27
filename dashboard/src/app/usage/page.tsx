@@ -79,25 +79,25 @@ function UsageContent() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <Card className="bg-zinc-900 border-zinc-800 ring-0">
             <Text className="text-zinc-400">Reviews</Text>
-            <p className="text-2xl font-bold text-white mt-1">{usage.reviewCount}</p>
-            {usage.plan?.maxReviewsPerMonth > 0 && (
-              <ProgressBar value={(usage.reviewCount / usage.plan.maxReviewsPerMonth) * 100} className="mt-2" />
+            <p className="text-2xl font-bold text-white mt-1">{usage.usage.reviewCount}</p>
+            {usage.limits && usage.limits.maxReviewsPerMonth > 0 && (
+              <ProgressBar value={(usage.usage.reviewCount / usage.limits.maxReviewsPerMonth) * 100} className="mt-2" />
             )}
           </Card>
           <Card className="bg-zinc-900 border-zinc-800 ring-0">
             <Text className="text-zinc-400">Findings</Text>
-            <p className="text-2xl font-bold text-white mt-1">{usage.findingsCount}</p>
+            <p className="text-2xl font-bold text-white mt-1">{usage.usage.findingsCount}</p>
           </Card>
           <Card className="bg-zinc-900 border-zinc-800 ring-0">
             <Text className="text-zinc-400">Tokens</Text>
-            <p className="text-2xl font-bold text-white mt-1">{Math.round(usage.tokensUsed / 1000)}k</p>
-            {usage.plan?.maxTokensPerMonth > 0 && (
-              <ProgressBar value={(usage.tokensUsed / usage.plan.maxTokensPerMonth) * 100} className="mt-2" />
+            <p className="text-2xl font-bold text-white mt-1">{Math.round((usage.usage.tokensUsed ?? 0) / 1000)}k</p>
+            {usage.limits && usage.limits.maxTokensPerMonth > 0 && (
+              <ProgressBar value={(usage.usage.tokensUsed / usage.limits.maxTokensPerMonth) * 100} className="mt-2" />
             )}
           </Card>
           <Card className="bg-zinc-900 border-zinc-800 ring-0">
             <Text className="text-zinc-400">LLM Cost</Text>
-            <p className="text-2xl font-bold text-white mt-1">${(usage.llmCostCents / 100).toFixed(2)}</p>
+            <p className="text-2xl font-bold text-white mt-1">${((usage.usage.llmCostCents ?? 0) / 100).toFixed(2)}</p>
           </Card>
         </div>
       )}

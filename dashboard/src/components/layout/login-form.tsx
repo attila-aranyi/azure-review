@@ -16,7 +16,7 @@ export function LoginForm() {
     setLoading(true);
 
     try {
-      const baseUrl = url.replace(/\/+$/, "");
+      const baseUrl = url.trim().replace(/\/+$/, "");
 
       // Try auth directly — if CORS blocks /health, this will also fail
       // but gives a clearer error message
