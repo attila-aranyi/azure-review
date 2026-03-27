@@ -46,6 +46,9 @@ const adoAuthMiddlewareImpl: FastifyPluginAsync<{
   app.decorateRequest("adoUserId", undefined);
 
   app.addHook("onRequest", async (request, reply) => {
+    // Skip auth for CORS preflight requests
+    if (request.method === "OPTIONS") return;
+
     const authHeader = request.headers.authorization;
     if (!authHeader) {
       return reply.code(401).send({ error: "Missing Authorization header" });
