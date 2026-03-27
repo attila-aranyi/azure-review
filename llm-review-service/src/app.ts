@@ -41,8 +41,9 @@ export async function buildApp(args: BuildAppArgs) {
   }
 
   const corsOrigins = args.config.CORS_ORIGINS;
+  const isSelfHosted = args.appConfig?.DEPLOYMENT_MODE === "self-hosted";
   await app.register(cors, {
-    origin: corsOrigins.length > 0 ? corsOrigins : false
+    origin: corsOrigins.length > 0 ? corsOrigins : isSelfHosted ? true : false,
   });
 
   const queue = createReviewQueue(args.config, auditStore, {

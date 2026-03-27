@@ -17,13 +17,22 @@ export function LoginForm() {
 
     try {
       const baseUrl = url.replace(/\/+$/, "");
-      const res = await fetch(`${baseUrl}/health`);
-      if (!res.ok) throw new Error("Service not reachable");
 
+      // Try auth directly — if CORS blocks /health, this will also fail
+      // but gives a clearer error message
       const authRes = await fetch(`${baseUrl}/api/tenants/me`, {
         headers: { Authorization: `Bearer ${pat}` },
-      });
-      if (!authRes.ok) throw new Error("Authentication failed. Check your PAT.");
+      }).catch(() => null);
+
+      if (!authRes) {
+        throw new Error("Cannot reach service. Check the URL and ensure CORS is configured (CORS_ORIGINS env var on the backend).");
+      }
+      if (authRes.status === 401) {
+        throw new Error("Authentication failed. Check your PAT has the correct scopes.");
+      }
+      if (!authRes.ok) {
+        throw new Error(`Service returned ${authRes.status}. Check the URL.`);
+      }
 
       login(baseUrl, pat);
     } catch (err) {
