@@ -51,7 +51,18 @@ The service supports both **SaaS** (multi-tenant, OAuth) and **self-hosted** (si
 ### Code Intelligence (Optional)
 - Axon sidecar for impact analysis, dead code detection, and call graphs
 - Enriches LLM context with structural code information
+- Graph proxy API for dashboard visualization
 - Graceful degradation when unavailable
+
+### Dashboard
+- Standalone web dashboard (Next.js + Tailwind + Tremor)
+- PAT-based authentication
+- **Dashboard Home** — KPI cards, findings trend chart, issue type breakdown, recent reviews
+- **Review Log** — paginated review list, drill-down to findings with severity badges, feedback (thumbs up/down)
+- **Code Graph** — interactive Cytoscape.js visualization of Axon symbol graph, impact analysis, dead code highlighting
+- **Rules Editor** — CRUD for custom review rules with inline validation
+- **Settings** — tenant config, review strictness, LLM provider status, project enrollment
+- **Usage & Audit** — daily/monthly usage charts, plan limits, audit log export (JSON/CSV download)
 
 ## Quick Start (Self-Hosted)
 
@@ -103,6 +114,39 @@ docker compose pull
 docker compose up -d
 ```
 
+### Azure Demo Deployment
+
+A one-command deploy script provisions all Azure resources:
+
+```bash
+cd deploy/azure-demo
+./deploy.sh        # Provisions ACR, Postgres, Container Apps, configures webhooks
+./teardown.sh      # Deletes all resources
+```
+
+## Dashboard
+
+The dashboard is a standalone Next.js web app in the `dashboard/` directory.
+
+### Running Locally
+
+```bash
+cd dashboard
+npm install
+npm run dev        # http://localhost:3000
+```
+
+Connect by entering your service URL and PAT in the login form.
+
+### Deploying
+
+The dashboard exports as static files (`output: "export"` in next.config.ts) suitable for Azure Static Web Apps, Vercel, or any static hosting.
+
+```bash
+cd dashboard
+npm run build      # Generates static export in out/
+```
+
 ## Development
 
 ### Prerequisites
@@ -113,6 +157,7 @@ docker compose up -d
 ### Setup
 
 ```bash
+cd llm-review-service
 npm install
 cp .env.example .env
 # Edit .env with your values
@@ -145,22 +190,28 @@ npm run dev
 ### Project Structure
 
 ```
-src/
-  app.ts                  # Fastify app builder
-  server.ts               # Entry point, graceful shutdown
-  config/                 # App config (env vars) + config resolver
-  auth/                   # Encryption, OAuth token management
-  middleware/             # JWT/API key auth, rate limiting
-  db/                     # Drizzle ORM schema, repos, migrations
-  llm/                    # LLM clients, prompts, providers
-  review/                 # Review pipeline, rules, severity, audit
-  routes/                 # Webhook, auth, and API routes
-  axon/                   # Axon client, context enricher
-  axon-sidecar/           # Python FastAPI sidecar (code intelligence)
-  selfHosted/             # Self-hosted bootstrap logic
-deploy/
-  self-hosted/            # Docker Compose, .env.example, setup.sh
-test/                     # Vitest tests (560 tests)
+llm-review-service/
+  src/
+    app.ts                  # Fastify app builder
+    server.ts               # Entry point, graceful shutdown
+    config/                 # App config (env vars) + config resolver
+    auth/                   # Encryption, OAuth token management
+    middleware/             # JWT/API key auth, rate limiting
+    db/                     # Drizzle ORM schema, repos, migrations
+    llm/                    # LLM clients, prompts, providers
+    review/                 # Review pipeline, rules, severity, audit
+    routes/                 # Webhook, auth, and API routes
+    axon/                   # Axon client, context enricher
+    axon-sidecar/           # Python FastAPI sidecar (code intelligence)
+    selfHosted/             # Self-hosted bootstrap logic
+  deploy/
+    self-hosted/            # Docker Compose, .env.example, setup.sh
+    azure-demo/             # Azure deployment script + teardown
+  test/                     # Vitest tests (560 tests)
+dashboard/
+  src/app/                  # Next.js pages (home, reviews, graph, rules, settings, usage)
+  src/components/           # Layout, sidebar, login form
+  src/lib/                  # API client, auth context
 ```
 
 ## Architecture
@@ -174,6 +225,7 @@ test/                     # Vitest tests (560 tests)
 | LLM keys | Managed or BYOK | BYOK mandatory |
 | Billing | Plan enforcement | Disabled |
 | Database | External Postgres | Bundled or external |
+| CORS | Configured origins | All origins allowed |
 
 ### Configuration Layers
 
@@ -186,12 +238,14 @@ Config is resolved in order, with each layer overriding the previous:
 
 ### Tech Stack
 
-- **Runtime:** Node.js 20, TypeScript, Fastify
-- **Database:** PostgreSQL 16 via Drizzle ORM
+- **Backend:** Node.js 20, TypeScript, Fastify, Drizzle ORM
+- **Database:** PostgreSQL 16
 - **Queue:** BullMQ + Redis (optional)
 - **LLM Providers:** Anthropic, OpenAI, Azure OpenAI
 - **Code Intelligence:** Python FastAPI sidecar (Axon)
+- **Dashboard:** Next.js 16, Tailwind CSS, Tremor, Cytoscape.js
 - **CI:** GitHub Actions (lint, typecheck, build, tests, Docker build)
+- **Deployment:** Azure Container Apps, ACR, PostgreSQL Flexible Server
 
 ## API Reference
 
@@ -203,22 +257,29 @@ Config is resolved in order, with each layer overriding the previous:
 - `GET /auth/ado/callback` - OAuth callback
 - `DELETE /auth/ado/connection/:tenantId` - Revoke tokens
 
-### Management API (JWT-protected)
+### Management API (JWT/PAT-protected)
+- `GET /api/tenants/me` - Current tenant info
+- `GET /api/tenants/me/status` - Tenant status with counts
+- `GET/PUT /api/config` - Tenant-level review config
+- `GET /api/projects` - List enrolled projects
+- `GET /api/reviews` - List reviews (paginated)
+- `GET /api/reviews/:id` - Review detail with findings
+- `POST /api/reviews/:id/retrigger` - Re-run review
+- `POST /api/reviews/:id/findings/:findingId/feedback` - Submit feedback
 - `GET/POST /api/rules` - Tenant-level review rules
 - `PUT/DELETE /api/rules/:ruleId` - Update/delete rule
 - `GET/POST /api/repos/:repoId/rules` - Repo-level rules
 - `GET /api/repos/:repoId/rules/effective` - Effective rules (tenant + repo)
 - `GET/PUT/DELETE /api/repos/:repoId/config` - Repo config overrides
 - `GET /api/repos/:repoId/config/effective` - Merged config
-- `GET /api/reviews` - List reviews (paginated)
-- `GET /api/reviews/:id` - Review detail with findings
-- `POST /api/reviews/:id/retrigger` - Re-run review
-- `POST /api/reviews/:id/findings/:findingId/feedback` - Submit feedback
 - `GET /api/usage` - Monthly usage summary
 - `GET /api/usage/daily` - Daily usage breakdown
 - `PUT/DELETE /api/config/llm-key` - BYOK LLM key management
 - `GET /api/config/llm-status` - LLM config status
 - `GET /api/export/audit` - Audit log export (JSON/CSV)
+- `GET /api/repos/:repoId/graph` - Axon graph status
+- `GET /api/repos/:repoId/graph/impact/:symbol` - Impact analysis
+- `GET /api/repos/:repoId/graph/dead-code` - Dead code detection
 
 ## License
 
