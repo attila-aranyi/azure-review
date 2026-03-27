@@ -135,6 +135,10 @@ function SettingsContent() {
               <input type="checkbox" checked={config.enableA11yVisual} onChange={(e) => setConfig({ ...config, enableA11yVisual: e.target.checked })} className="rounded" />
               Accessibility (visual)
             </label>
+            <label className="flex items-center gap-2 text-sm text-zinc-300">
+              <input type="checkbox" checked={(config as Record<string, unknown>).enableAxon as boolean ?? false} onChange={(e) => setConfig({ ...config, enableAxon: e.target.checked } as TenantConfig)} className="rounded" />
+              Axon code intelligence
+            </label>
           </div>
         </Card>
       )}
