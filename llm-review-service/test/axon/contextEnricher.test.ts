@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { enrichReview } from "../../src/axon/contextEnricher";
 import type { AxonClient } from "../../src/axon/axonClient";
 import pino from "pino";
