@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 10 — sidecar v4 with 1CPU/2GB (was OOM at 0.5CPU/1GB)
+// axon test 11 — v20 with repo name→GUID resolution + re-index

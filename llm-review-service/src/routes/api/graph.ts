@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import type { DrizzleInstance } from "../../db/connection";
 import type { AppConfig } from "../../config/appConfig";
 import { AxonClient } from "../../axon/axonClient";
@@ -41,8 +41,8 @@ export const registerGraphRoutes: FastifyPluginAsync<{
     const row = await db
       .select({ repoId: reviews.repoId })
       .from(reviews)
-      .where(and(eq(reviews.tenantId, tenantId), sql`${reviews.repoId} != ${repoIdOrName}`))
-      .orderBy(sql`${reviews.createdAt} DESC`)
+      .where(eq(reviews.tenantId, tenantId))
+      .orderBy(desc(reviews.createdAt))
       .limit(1);
     return row[0]?.repoId ?? repoIdOrName;
   }
