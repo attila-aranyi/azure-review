@@ -118,10 +118,10 @@ def analyze(
                 env_extra={"AXON_GRAPH_DIR": graph_path},
             )
         except AxonError as e:
-            logger.error("axon analyze failed: %s", e)
+            logger.error("axon analyze failed: %s (returncode=%d, stderr=%s)", e, e.returncode, e.stderr)
             return {
                 "status": "failed",
-                "error": str(e),
+                "error": f"{e} | stderr: {e.stderr}",
                 "duration_ms": int((time.monotonic() - start) * 1000),
                 "graph_path": graph_path,
             }

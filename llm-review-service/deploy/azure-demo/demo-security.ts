@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 8 — sidecar rebuilt with axoniq 1.0.1 installed
+// axon test 9 — sidecar v3 with stderr logging
