@@ -12,6 +12,7 @@ SERVICE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # ── Resource naming ──────────────────────────────────────
 LOCATION="westeurope"
+PSQL_LOCATION="northeurope"  # Postgres may be restricted in some regions
 RESOURCE_GROUP="rg-code-review-demo"
 ACR_NAME="acrcodereviewdemo"
 CAE_NAME="cae-code-review-demo"
@@ -55,14 +56,10 @@ read -rp "  Azure DevOps organization name (e.g., myorg): " ADO_ORG
 read -rp "  Azure DevOps project name: " ADO_PROJECT
 [ -z "$ADO_PROJECT" ] && fail "ADO project name is required"
 
-echo -n "  Azure DevOps PAT (Code R/W + Service Hooks R/W): "
-read -rs ADO_PAT
-echo
+read -rp "  Azure DevOps PAT (Code R/W + Service Hooks R/W): " ADO_PAT
 [ -z "$ADO_PAT" ] && fail "ADO PAT is required"
 
-echo -n "  Anthropic API key: "
-read -rs ANTHROPIC_API_KEY
-echo
+read -rp "  Anthropic API key: " ANTHROPIC_API_KEY
 [ -z "$ANTHROPIC_API_KEY" ] && fail "Anthropic API key is required"
 
 # Generate secrets
@@ -108,26 +105,17 @@ else
   az postgres flexible-server create \
     --name "$PSQL_SERVER" \
     --resource-group "$RESOURCE_GROUP" \
-    --location "$LOCATION" \
+    --location "$PSQL_LOCATION" \
     --admin-user "$PSQL_ADMIN_USER" \
     --admin-password "$PSQL_PASSWORD" \
     --sku-name Standard_B1ms \
     --tier Burstable \
     --storage-size 32 \
     --version 16 \
+    --public-access 0.0.0.0 \
     --yes \
     -o none
   ok "Created PostgreSQL '$PSQL_SERVER'"
-
-  # Allow Azure services to connect
-  az postgres flexible-server firewall-rule create \
-    --name "$PSQL_SERVER" \
-    --resource-group "$RESOURCE_GROUP" \
-    --rule-name AllowAzureServices \
-    --start-ip-address 0.0.0.0 \
-    --end-ip-address 0.0.0.0 \
-    -o none
-  ok "Firewall rule: allow Azure services"
 fi
 
 # Create database
