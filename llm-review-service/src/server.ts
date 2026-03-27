@@ -8,6 +8,7 @@ import { runMigrations } from "./db/migrate";
 import { TokenManager } from "./auth/tokenManager";
 import { deriveEncryptionKey } from "./auth/encryption";
 import { startTokenRefreshJob } from "./jobs/tokenRefresh";
+import { bootstrapSelfHostedTenant, validateSelfHostedLlmKeys } from "./selfHosted/bootstrap";
 
 async function main() {
   const config = loadConfig(process.env);
@@ -27,6 +28,22 @@ async function main() {
 
     await initializeDb(appConfig.DATABASE_URL);
     db = getDb();
+
+    // Self-hosted: validate LLM keys and auto-provision tenant
+    if (appConfig.DEPLOYMENT_MODE === "self-hosted") {
+      const llmError = validateSelfHostedLlmKeys(appConfig);
+      if (llmError) {
+        logger.error(llmError);
+        process.exit(1);
+      }
+
+      const bootstrap = await bootstrapSelfHostedTenant(db, appConfig);
+      if (bootstrap.created) {
+        logger.info({ tenantId: bootstrap.tenantId, adoOrgId: bootstrap.adoOrgId }, "Auto-provisioned self-hosted tenant");
+      } else {
+        logger.info({ tenantId: bootstrap.tenantId, adoOrgId: bootstrap.adoOrgId }, "Using existing self-hosted tenant");
+      }
+    }
 
     if (appConfig.TOKEN_ENCRYPTION_KEY) {
       const encryptionKey = deriveEncryptionKey(appConfig.TOKEN_ENCRYPTION_KEY);

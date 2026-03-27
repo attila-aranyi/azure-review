@@ -1,0 +1,82 @@
+# Self-Hosted AI Code Review for Azure DevOps
+# Run: docker compose up -d
+# First-time setup: ./setup.sh
+
+services:
+  llm-review-service:
+    image: ${IMAGE:-ghcr.io/attila-aranyi/llm-review-service:latest}
+    build:
+      context: ../../
+      dockerfile: Dockerfile
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file: .env
+    environment:
+      DEPLOYMENT_MODE: self-hosted
+      DATABASE_URL: postgresql://${POSTGRES_USER:-llmreview}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-llmreview}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      AXON_SIDECAR_URL: ${AXON_ENABLED:+http://axon-sidecar:8100}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-llmreview}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      POSTGRES_DB: ${POSTGRES_DB:-llmreview}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-llmreview}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    profiles:
+      - redis
+
+  axon-sidecar:
+    image: ${AXON_IMAGE:-ghcr.io/attila-aranyi/axon-sidecar:latest}
+    build:
+      context: ../../src/axon-sidecar
+      dockerfile: Dockerfile
+    volumes:
+      - axon_data:/data
+    environment:
+      DATA_DIR: /data
+      LOG_LEVEL: ${AXON_LOG_LEVEL:-INFO}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8100/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    profiles:
+      - axon
+
+volumes:
+  pgdata:
+  axon_data:

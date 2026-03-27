@@ -1,4 +1,5 @@
 import type { ReviewStrictness } from "../types";
+import { formatRulesForPrompt, type ReviewRule } from "../../review/reviewRules";
 
 const baseReviewerSystemPrompt = [
   "You are a senior code reviewer.",
@@ -63,8 +64,9 @@ export function buildReviewerPrompt(args: {
   hunkText: string;
   contextBundleText: string;
   codingStandardsText: string;
+  customRules?: ReviewRule[];
 }) {
-  return [
+  const parts = [
     `FILE_PATH: ${args.filePath}`,
     `HUNK_START_LINE: ${args.hunkStartLine}`,
     `HUNK_END_LINE: ${args.hunkEndLine}`,
@@ -84,6 +86,18 @@ export function buildReviewerPrompt(args: {
     args.codingStandardsText.trim(),
     "```",
     "",
+  ];
+
+  // Inject custom rules (sandboxed) between CODING_STANDARDS and OUTPUT_SCHEMA
+  if (args.customRules && args.customRules.length > 0) {
+    const rulesSection = formatRulesForPrompt(args.customRules);
+    if (rulesSection) {
+      parts.push(rulesSection);
+      parts.push("");
+    }
+  }
+
+  parts.push(
     "OUTPUT_SCHEMA (use these exact camelCase field names):",
     '```json',
     JSON.stringify({
@@ -98,5 +112,7 @@ export function buildReviewerPrompt(args: {
       }]
     }, null, 2),
     '```'
-  ].join("\n");
+  );
+
+  return parts.join("\n");
 }

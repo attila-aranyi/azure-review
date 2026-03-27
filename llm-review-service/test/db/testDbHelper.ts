@@ -266,6 +266,37 @@ export async function setupTestDb(): Promise<DrizzleInstance> {
   `);
 
   await testDb.execute(sql`
+    CREATE TABLE IF NOT EXISTS review_rules (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      ado_repo_id VARCHAR(255),
+      name VARCHAR(100) NOT NULL,
+      description VARCHAR(500) NOT NULL,
+      category VARCHAR(50) NOT NULL,
+      severity VARCHAR(20) NOT NULL,
+      file_glob TEXT,
+      instruction VARCHAR(500) NOT NULL,
+      example_good VARCHAR(1000),
+      example_bad VARCHAR(1000),
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await testDb.execute(sql`
+    CREATE INDEX IF NOT EXISTS review_rules_tenant_id_idx ON review_rules (tenant_id)
+  `);
+
+  await testDb.execute(sql`
+    CREATE INDEX IF NOT EXISTS review_rules_tenant_repo_idx ON review_rules (tenant_id, ado_repo_id)
+  `);
+
+  await testDb.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS review_rules_tenant_repo_name_unique ON review_rules (tenant_id, ado_repo_id, name)
+  `);
+
+  await testDb.execute(sql`
     CREATE TABLE IF NOT EXISTS review_feedback (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       finding_id UUID NOT NULL REFERENCES review_findings(id) ON DELETE CASCADE,
@@ -285,7 +316,7 @@ export async function setupTestDb(): Promise<DrizzleInstance> {
 }
 
 export async function truncateAll(testDb: DrizzleInstance): Promise<void> {
-  await testDb.execute(sql`TRUNCATE review_feedback, review_findings, reviews, repo_configs, repo_indexes, usage_daily, plan_limits, project_enrollments, tenant_configs, tenant_oauth_tokens, tenants CASCADE`);
+  await testDb.execute(sql`TRUNCATE review_rules, review_feedback, review_findings, reviews, repo_configs, repo_indexes, usage_daily, plan_limits, project_enrollments, tenant_configs, tenant_oauth_tokens, tenants CASCADE`);
 }
 
 export async function teardownTestDb(): Promise<void> {
