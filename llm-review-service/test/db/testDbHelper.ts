@@ -8,6 +8,7 @@ const TEST_DATABASE_URL = process.env.DATABASE_URL ?? "postgresql://localhost:54
 
 let pool: pg.Pool | null = null;
 let db: DrizzleInstance | null = null;
+let tablesCreated = false;
 
 export function getTestDatabaseUrl(): string {
   return TEST_DATABASE_URL;
@@ -30,6 +31,9 @@ export async function getTestDb(): Promise<DrizzleInstance> {
 
 export async function setupTestDb(): Promise<DrizzleInstance> {
   const testDb = await getTestDb();
+
+  // Only create tables once per process to avoid redundant DDL
+  if (tablesCreated) return testDb;
 
   // Create tables if they don't exist
   await testDb.execute(sql`
@@ -331,17 +335,28 @@ export async function setupTestDb(): Promise<DrizzleInstance> {
     CREATE INDEX IF NOT EXISTS review_feedback_tenant_id_idx ON review_feedback (tenant_id)
   `);
 
+  tablesCreated = true;
   return testDb;
 }
 
 export async function truncateAll(testDb: DrizzleInstance): Promise<void> {
-  await testDb.execute(sql`TRUNCATE review_rules, review_feedback, review_findings, reviews, repo_configs, repo_indexes, usage_daily, plan_limits, project_enrollments, tenant_configs, tenant_oauth_tokens, tenants CASCADE`);
+  // Use DELETE instead of TRUNCATE to avoid locking issues in test environments.
+  // Delete in dependency order (children first) to respect FK constraints.
+  await testDb.execute(sql`DELETE FROM review_feedback`);
+  await testDb.execute(sql`DELETE FROM review_findings`);
+  await testDb.execute(sql`DELETE FROM review_rules`);
+  await testDb.execute(sql`DELETE FROM usage_daily`);
+  await testDb.execute(sql`DELETE FROM plan_limits`);
+  await testDb.execute(sql`DELETE FROM repo_configs`);
+  await testDb.execute(sql`DELETE FROM repo_indexes`);
+  await testDb.execute(sql`DELETE FROM reviews`);
+  await testDb.execute(sql`DELETE FROM project_enrollments`);
+  await testDb.execute(sql`DELETE FROM tenant_configs`);
+  await testDb.execute(sql`DELETE FROM tenant_oauth_tokens`);
+  await testDb.execute(sql`DELETE FROM tenants`);
 }
 
 export async function teardownTestDb(): Promise<void> {
-  if (pool) {
-    await pool.end();
-    pool = null;
-    db = null;
-  }
+  // Pool is kept alive for the entire process (singleFork mode).
+  // Node.js will close it on process exit.
 }
