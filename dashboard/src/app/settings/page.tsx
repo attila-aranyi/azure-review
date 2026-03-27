@@ -36,9 +36,8 @@ function SettingsContent() {
     if (!config) return;
     setSaving(true);
     try {
-      // Replace null values with empty strings to satisfy backend validation
       const cleaned = Object.fromEntries(
-        Object.entries(config).map(([k, v]) => [k, v === null ? "" : v])
+        Object.entries(config).map(([k, v]) => [k, v === null || v === undefined ? "" : v])
       );
       await api.updateConfig(cleaned as Partial<TenantConfig>);
     } finally {
