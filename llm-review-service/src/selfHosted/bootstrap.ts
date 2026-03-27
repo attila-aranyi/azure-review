@@ -1,5 +1,7 @@
 import type { DrizzleInstance } from "../db/connection";
 import { createTenantRepo } from "../db/repos/tenantRepo";
+import { createProjectRepo } from "../db/repos/projectRepo";
+import { encrypt } from "../auth/encryption";
 import type { AppConfig } from "../config/appConfig";
 
 export interface BootstrapResult {
@@ -10,18 +12,36 @@ export interface BootstrapResult {
 
 /**
  * In self-hosted mode, auto-creates a single tenant on startup if none exists.
+ * Also creates a project enrollment with the webhook secret so webhooks can authenticate.
  * Uses ADO_ORG env var or defaults to "self-hosted".
  */
 export async function bootstrapSelfHostedTenant(
   db: DrizzleInstance,
   appConfig: AppConfig,
+  encryptionKey?: Buffer,
 ): Promise<BootstrapResult> {
   const tenantRepo = createTenantRepo(db);
+  const projectRepo = createProjectRepo(db);
   const adoOrgId = appConfig.ADO_ORG ?? "self-hosted";
+  const adoProjectId = appConfig.ADO_PROJECT ?? "default";
 
   // Check if tenant already exists
   const existing = await tenantRepo.findByAdoOrgId(adoOrgId);
   if (existing) {
+    // Ensure project enrollment exists with current webhook secret
+    if (appConfig.WEBHOOK_SECRET && encryptionKey) {
+      const enrollments = await projectRepo.findByTenantId(existing.id);
+      if (enrollments.length === 0) {
+        const encSecret = encrypt(appConfig.WEBHOOK_SECRET, encryptionKey).toString("base64");
+        await projectRepo.create({
+          tenantId: existing.id,
+          adoProjectId,
+          adoProjectName: adoProjectId,
+          webhookSecretEnc: encSecret,
+          status: "active",
+        });
+      }
+    }
     return { tenantId: existing.id, adoOrgId, created: false };
   }
 
@@ -32,6 +52,18 @@ export async function bootstrapSelfHostedTenant(
     status: "active",
     plan: "enterprise",
   });
+
+  // Create project enrollment with webhook secret
+  if (appConfig.WEBHOOK_SECRET && encryptionKey) {
+    const encSecret = encrypt(appConfig.WEBHOOK_SECRET, encryptionKey).toString("base64");
+    await projectRepo.create({
+      tenantId: tenant.id,
+      adoProjectId,
+      adoProjectName: adoProjectId,
+      webhookSecretEnc: encSecret,
+      status: "active",
+    });
+  }
 
   return { tenantId: tenant.id, adoOrgId, created: true };
 }

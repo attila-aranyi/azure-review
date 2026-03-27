@@ -29,6 +29,12 @@ async function main() {
     await initializeDb(appConfig.DATABASE_URL);
     db = getDb();
 
+    // Derive encryption key early (needed for both bootstrap and token manager)
+    let encryptionKey: Buffer | undefined;
+    if (appConfig.TOKEN_ENCRYPTION_KEY) {
+      encryptionKey = deriveEncryptionKey(appConfig.TOKEN_ENCRYPTION_KEY);
+    }
+
     // Self-hosted: validate LLM keys and auto-provision tenant
     if (appConfig.DEPLOYMENT_MODE === "self-hosted") {
       const llmError = validateSelfHostedLlmKeys(appConfig);
@@ -37,7 +43,7 @@ async function main() {
         process.exit(1);
       }
 
-      const bootstrap = await bootstrapSelfHostedTenant(db, appConfig);
+      const bootstrap = await bootstrapSelfHostedTenant(db, appConfig, encryptionKey);
       if (bootstrap.created) {
         logger.info({ tenantId: bootstrap.tenantId, adoOrgId: bootstrap.adoOrgId }, "Auto-provisioned self-hosted tenant");
       } else {
@@ -45,8 +51,7 @@ async function main() {
       }
     }
 
-    if (appConfig.TOKEN_ENCRYPTION_KEY) {
-      const encryptionKey = deriveEncryptionKey(appConfig.TOKEN_ENCRYPTION_KEY);
+    if (encryptionKey) {
       tokenManager = new TokenManager(
         db,
         encryptionKey,
