@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 7 — v18 deployed with per-repo config resolver fix
+// axon test 8 — sidecar rebuilt with axoniq 1.0.1 installed
