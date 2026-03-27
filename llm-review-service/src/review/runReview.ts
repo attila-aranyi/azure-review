@@ -148,6 +148,7 @@ export async function runReview(_args: {
     const axonEnabled = context?.config.enableAxon ?? false;
     const axonUrl = process.env.AXON_SIDECAR_URL;
 
+    logger.info({ axonEnabled, axonUrl: axonUrl ?? "(unset)", hasPr: !!pr }, "Axon gate check");
     if (axonEnabled && axonUrl && pr) {
       logger.info("Running Axon code intelligence enrichment");
       try {

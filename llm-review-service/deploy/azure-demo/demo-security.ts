@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 4 — fixed sidecar ingress transport TCP→HTTP
+// axon test 5 — rebuilt main service with diagnostic logging
