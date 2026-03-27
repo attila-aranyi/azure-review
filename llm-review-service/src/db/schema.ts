@@ -1,4 +1,5 @@
-import { pgTable, uuid, varchar, text, timestamp, boolean, integer, jsonb, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, timestamp, boolean, integer, jsonb, uniqueIndex, index, check } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const tenants = pgTable("tenants", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -159,6 +160,27 @@ export const planLimits = pgTable("plan_limits", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex("plan_limits_plan_unique").on(table.plan),
+]);
+
+export const reviewRules = pgTable("review_rules", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  adoRepoId: varchar("ado_repo_id", { length: 255 }), // null = tenant-level rule
+  name: varchar("name", { length: 100 }).notNull(),
+  description: varchar("description", { length: 500 }).notNull(),
+  category: varchar("category", { length: 50 }).notNull(), // naming | security | style | patterns | documentation
+  severity: varchar("severity", { length: 20 }).notNull(), // info | low | medium | high | critical
+  fileGlob: text("file_glob"),
+  instruction: varchar("instruction", { length: 500 }).notNull(),
+  exampleGood: varchar("example_good", { length: 1000 }),
+  exampleBad: varchar("example_bad", { length: 1000 }),
+  enabled: boolean("enabled").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index("review_rules_tenant_id_idx").on(table.tenantId),
+  index("review_rules_tenant_repo_idx").on(table.tenantId, table.adoRepoId),
+  uniqueIndex("review_rules_tenant_repo_name_unique").on(table.tenantId, table.adoRepoId, table.name),
 ]);
 
 export const reviewFeedback = pgTable("review_feedback", {

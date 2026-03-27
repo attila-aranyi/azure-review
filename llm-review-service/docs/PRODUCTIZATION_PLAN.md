@@ -1080,100 +1080,120 @@ for (const finding of resolvedFindings) {
 
 ## 6. Phase 3: Enterprise (Weeks 13-20)
 
-### 6.1 Self-Hosted Distribution (Week 13-15)
+### Phase 3 Implementation Status
+
+**Completed:**
+- Custom review rules (structured, sandboxed, 25/scope cap) -- `src/review/reviewRules.ts`, `src/db/repos/rulesRepo.ts`, `src/routes/api/rules.ts`
+- Audit log export (JSON + CSV, 90-day cap) -- `src/routes/api/auditExport.ts`, `src/db/repos/auditExportRepo.ts`
+- Self-hosted Docker Compose distribution -- `deploy/self-hosted/`
+- Auto-tenant bootstrap on startup -- `src/selfHosted/bootstrap.ts`
+- Setup wizard (hybrid interactive/validation) -- `deploy/self-hosted/setup.sh`
+- Auto-migrate on startup -- already in `src/server.ts`
+
+**Deferred to Phase 4:**
+- Billing integration (Stripe / Azure Marketplace)
+- Org analytics dashboard
+- Multi-model routing per stage
+- Data residency (regional deployments)
+- SSO/SCIM for self-hosted admin UI
+- Helm Chart distribution (TODO)
+- Bicep/ARM Template distribution (TODO)
+
+---
+
+### 6.1 Self-Hosted Distribution (Docker Compose)
 
 **`DEPLOYMENT_MODE=self-hosted` changes:**
 - Multi-tenancy disabled (single tenant, auto-created on startup)
 - OAuth optional; PAT auth supported (kept from current codebase)
 - BYOK mandatory (managed LLM keys not exposed)
 - Billing enforcement disabled (informational only)
-- Simpler admin UI served by the container itself
+- Auto-migrate on startup (pending migrations run on boot)
 
-**Distribution options:**
+**Distribution (implemented):**
 
-**A. Helm Chart** (for Kubernetes):
+**Docker Compose** (`deploy/self-hosted/`):
 ```
-charts/ai-code-review/
-  Chart.yaml
-  values.yaml
-  templates/
-    deployment.yaml
-    service.yaml
-    configmap.yaml
-    secret.yaml
-    ingress.yaml
-    migration-job.yaml
+deploy/self-hosted/
+  docker-compose.yml    # App + Postgres + Redis (optional) + Axon (optional)
+  .env.example          # Configuration template with comments
+  setup.sh              # Hybrid wizard: interactive first run, Level 3 validation on subsequent runs
 ```
 
-Key `values.yaml`:
-```yaml
-deploymentMode: self-hosted
-image:
-  repository: yourregistry.azurecr.io/ai-code-review
-  tag: "1.0.0"
-database:
-  host: ""
-  port: 5432
-  name: "ai_code_review"
-redis:
-  host: ""
-  port: 6379
-ado:
-  orgUrl: "https://dev.azure.com/customer-org"
-  authMode: "pat"  # or "oauth"
-  pat: ""
-llm:
-  provider: "anthropic"
-  apiKey: ""
-  model: "claude-sonnet-4-6"
-```
+**Setup wizard features:**
+- Interactive first-run: prompts for ADO connection, LLM provider, database, optional features
+- Level 3 validation: checks presence + format + connectivity (PostgreSQL, ADO API, LLM API key)
+- Generates `.env` and webhook secret automatically
 
-**B. Bicep/ARM Template** (for Azure Container Apps):
-```
-infra/self-hosted/
-  main.bicep        # All resources
-  parameters.json   # Customer fills in
-```
-
-**C. Docker Compose** (for simple VM deployment):
-```
-deploy/
-  docker-compose.yml    # App + Postgres + Redis
-  .env.example          # Configuration template
-  setup.sh              # Interactive setup wizard
-```
-
-**Extension for self-hosted:**
-The marketplace extension supports a service endpoint configuration where customers enter their self-hosted URL. All API calls from the extension hubs go to that URL instead of the SaaS backend.
+**Future distribution options (TODO):**
+- **Helm Chart** for Kubernetes deployments
+- **Bicep/ARM Template** for Azure Container Apps
 
 ---
 
-### 6.2 Billing Integration (Week 15-17)
+### 6.2 Custom Review Rules
 
-**Option A: Stripe**
-- Customer portal for subscription management
-- Webhook handler for payment events
-- Plan upgrade/downgrade flow in Org Settings Hub
+**Structured rules only** (no free-text to prevent prompt injection):
 
-**Option B: Azure Marketplace Billing**
-- Users purchase directly from the marketplace listing
-- Integrates with Azure billing (customers pay via Azure subscription)
-- Microsoft handles invoicing and revenue collection (with revenue share)
+```typescript
+{
+  name: string;        // "no-any-type" (lowercase, hyphenated, max 100 chars)
+  description: string; // max 500 chars
+  category: "naming" | "security" | "style" | "patterns" | "documentation";
+  severity: "info" | "low" | "medium" | "high" | "critical";
+  fileGlob?: string;   // "*.ts" (max 200 chars)
+  instruction: string; // max 500 chars
+  exampleGood?: string; // max 1000 chars
+  exampleBad?: string;  // max 1000 chars
+  enabled: boolean;
+}
+```
 
-**Recommendation:** Start with Stripe for flexibility. Evaluate Azure Marketplace billing later (higher distribution but Microsoft takes ~20% revenue share).
+**Security:**
+- Keyword blocklist on all text fields (detects prompt injection attempts)
+- Rules sandboxed in LLM prompt with XML-like tags and preamble
+- Max 25 rules per scope (tenant or repo level)
+
+**3-layer model:** Tenant-level rules + repo-level overrides, following the existing config merge pattern.
+
+**API endpoints:**
+- `GET /api/rules` — list tenant-level rules
+- `POST /api/rules` — create tenant-level rule
+- `PUT /api/rules/:ruleId` — update rule
+- `DELETE /api/rules/:ruleId` — delete rule
+- `GET /api/repos/:repoId/rules` — list repo-level rules
+- `POST /api/repos/:repoId/rules` — create repo-level rule
+- `GET /api/repos/:repoId/rules/effective` — list effective rules (tenant + repo)
 
 ---
 
-### 6.3 Advanced Features (Week 17-20)
+### 6.3 Audit Log Export
 
-| Feature | Description |
-|---------|-------------|
-| Custom review rules | Tenants add custom instructions/rules for the LLM (coding standards, style guides) |
-| Org analytics | Dashboard: top reviewers, most common issues, trends over time |
-| Audit log export | CSV/JSON export for compliance requirements |
-| Multi-model routing | Different models for different stages (e.g., Claude for review, GPT-4o for a11y) |
-| Data residency | Regional deployments (EU, US) for data sovereignty |
-| SSO/SCIM | Enterprise SSO for self-hosted admin UI |
+**Data:** Reviews + individual findings (joined).
+
+**API endpoint:** `GET /api/export/audit?from=YYYY-MM-DD&to=YYYY-MM-DD&format=json|csv`
+
+**Constraints:**
+- 90-day max date range per request
+- JSON format: nested structure (reviews → findings array)
+- CSV format: flattened (one row per finding, review fields repeated)
+
+---
+
+### 6.4 Billing Integration — DEFERRED
+
+Deferred until there are paying customers. Plan assignment remains manual via DB.
+
+---
+
+### 6.5 Advanced Features — DEFERRED to Phase 4
+
+| Feature | Status |
+|---------|--------|
+| Org analytics dashboard | Phase 4 |
+| Multi-model routing per stage | Phase 4 |
+| Data residency (EU, US) | Phase 4 |
+| SSO/SCIM | Phase 4 |
 
 ---
 
