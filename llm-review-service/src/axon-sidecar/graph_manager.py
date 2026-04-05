@@ -292,63 +292,70 @@ def get_dead_code(
 def get_graph_data(tenant_id: str, repo_id: str, repo_path: str) -> dict:
     """Return the full graph for visualization: nodes, edges, clusters.
 
-    Uses axoniq Python API directly instead of CLI commands.
+    Uses axon's KuzuBackend to read the persisted graph directly.
     """
+    from pathlib import Path as _Path
+    from axon.core.storage.kuzu_backend import KuzuBackend
+    from axon.core.graph.graph import NodeLabel, RelType
+
     nodes = []
     edges = []
     clusters: dict[int, int] = {}
 
+    # axon stores its DB in <repo>/.axon/kuzu
+    axon_db_path = _Path(repo_path) / ".axon" / "kuzu"
+    if not axon_db_path.exists():
+        logger.warning("No axon kuzu DB at %s", axon_db_path)
+        return {"nodes": [], "edges": [], "clusters": []}
+
+    backend = KuzuBackend()
     try:
-        import axoniq
+        backend.initialize(axon_db_path, read_only=True)
+        kg = backend.load_graph()
 
-        # Use axoniq Python API to read the indexed graph
-        ax = axoniq.load(repo_path)
-        symbols = ax.symbols() if hasattr(ax, "symbols") else []
+        # Collect nodes (functions, classes, methods, etc.)
+        symbol_labels = [NodeLabel.FUNCTION, NodeLabel.CLASS, NodeLabel.METHOD,
+                         NodeLabel.INTERFACE, NodeLabel.TYPE_ALIAS, NodeLabel.ENUM]
+        for label in symbol_labels:
+            for node_id, node in kg.get_nodes_by_label(label).items():
+                name = node_id
+                file = node.file_path or ""
+                kind = label.value
+                cluster = 0  # community detection done separately
+                uid = f"{file}::{name}" if file else name
+                nodes.append({"id": uid, "label": name, "type": kind, "file": file, "cluster": cluster})
 
-        for sym in symbols:
-            name = getattr(sym, "name", str(sym))
-            kind = getattr(sym, "kind", "unknown")
-            file = getattr(sym, "file", "")
-            cluster = getattr(sym, "cluster_id", getattr(sym, "cluster", 0)) or 0
-            node_id = f"{file}::{name}" if file else name
-            nodes.append({"id": node_id, "label": name, "type": kind, "file": file, "cluster": cluster})
-            clusters[cluster] = clusters.get(cluster, 0) + 1
+        # Collect edges
+        edge_types = [RelType.CALLS, RelType.IMPORTS, RelType.INHERITS,
+                      RelType.TYPE_REF, RelType.OVERRIDES]
+        for rel_type in edge_types:
+            try:
+                for rel in kg.get_relationships_by_type(rel_type):
+                    src_file = ""
+                    tgt_file = ""
+                    src_node = kg.get_nodes_by_label(None).get(rel.source) if hasattr(rel, "source") else None
+                    if src_node:
+                        src_file = src_node.file_path or ""
+                    tgt_node = kg.get_nodes_by_label(None).get(rel.target) if hasattr(rel, "target") else None
+                    if tgt_node:
+                        tgt_file = tgt_node.file_path or ""
+                    src_id = f"{src_file}::{rel.source}" if src_file else str(rel.source)
+                    tgt_id = f"{tgt_file}::{rel.target}" if tgt_file else str(rel.target)
+                    edges.append({"source": src_id, "target": tgt_id, "type": rel_type.value})
+            except Exception:
+                pass
 
-            # Get edges from callers/callees
-            callees = getattr(sym, "callees", None)
-            if callees:
-                for callee in callees:
-                    callee_name = getattr(callee, "name", str(callee))
-                    callee_file = getattr(callee, "file", "")
-                    tgt_id = f"{callee_file}::{callee_name}" if callee_file else callee_name
-                    edges.append({"source": node_id, "target": tgt_id, "type": "CALLS"})
+        # Collect communities as clusters
+        for node_id, node in kg.get_nodes_by_label(NodeLabel.COMMUNITY).items():
+            clusters[len(clusters)] = 1
 
     except Exception as e:
-        logger.warning("axoniq Python API failed, trying CLI: %s", e)
-
-        # Fallback: try axon CLI commands
-        graph_path = _graph_path(tenant_id, repo_id)
+        logger.error("Failed to read graph from kuzu: %s", e, exc_info=True)
+    finally:
         try:
-            # Try 'axon query' to list all symbols
-            output = _run_axon(
-                ["query", "--all", "--output-format", "json"],
-                cwd=repo_path,
-                env_extra={"AXON_GRAPH_DIR": graph_path},
-                timeout=60,
-            )
-            import json as _json
-            data = _json.loads(output)
-            items = data if isinstance(data, list) else data.get("results", data.get("symbols", []))
-            for item in items:
-                name = item.get("name", "")
-                kind = item.get("kind", item.get("type", "unknown"))
-                file = item.get("file", "")
-                cluster = item.get("cluster_id", item.get("cluster", 0)) or 0
-                node_id = f"{file}::{name}" if file else name
-                nodes.append({"id": node_id, "label": name, "type": kind, "file": file, "cluster": cluster})
-                clusters[cluster] = clusters.get(cluster, 0) + 1
-        except Exception as e2:
-            logger.warning("CLI fallback also failed: %s", e2)
+            backend.close()
+        except Exception:
+            pass
 
     cluster_list = [{"id": k, "size": v} for k, v in sorted(clusters.items())]
     logger.info("Graph data: %d nodes, %d edges, %d clusters", len(nodes), len(edges), len(cluster_list))

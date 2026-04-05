@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 15 — use axoniq Python API for graph data extraction
+// axon test 16 — use KuzuBackend to read graph directly
