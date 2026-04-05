@@ -327,11 +327,23 @@ def get_graph_data(tenant_id: str, repo_id: str, repo_path: str) -> dict:
                 nodes.append({"id": uid, "label": name, "type": label.value, "file": file, "cluster": 0})
 
         # Collect edges from in-memory graph
+        sample_logged = False
+        unmatched = 0
         for rel in kg.iter_relationships():
-            src_id = id_map.get(str(rel.source), str(rel.source))
-            tgt_id = id_map.get(str(rel.target), str(rel.target))
+            src = str(rel.source)
+            tgt = str(rel.target)
+            if not sample_logged:
+                logger.info("Sample rel: source=%r target=%r type=%s", src, tgt, rel.type.value)
+                logger.info("Sample id_map keys: %s", list(id_map.keys())[:5])
+                sample_logged = True
+            src_id = id_map.get(src, src)
+            tgt_id = id_map.get(tgt, tgt)
             if src_id in node_ids and tgt_id in node_ids:
                 edges.append({"source": src_id, "target": tgt_id, "type": rel.type.value})
+            else:
+                unmatched += 1
+        if unmatched:
+            logger.info("Unmatched edges: %d (src/tgt not in node_ids)", unmatched)
 
         # Collect communities
         try:

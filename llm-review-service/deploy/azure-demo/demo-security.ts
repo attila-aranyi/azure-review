@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 24 — run_pipeline in-process for edges
+// axon test 25 — debug ID format mismatch
