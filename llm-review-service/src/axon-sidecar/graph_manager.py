@@ -330,36 +330,23 @@ def get_graph_data(tenant_id: str, repo_id: str, repo_path: str) -> dict:
                 id_map[axon_id] = uid
                 nodes.append({"id": uid, "label": name, "type": kind, "file": file, "cluster": 0})
 
-        # Collect ALL edges via iter_relationships
+        # Collect edges via get_relationships_by_type (iter_relationships doesn't populate from kuzu)
         node_ids = {n["id"] for n in nodes}
-        total_rels = kg.relationship_count
-        logger.info("KnowledgeGraph reports %d relationships", total_rels)
-        try:
-            raw_count = 0
-            matched_count = 0
-            for rel in kg.iter_relationships():
-                raw_count += 1
-                src = str(rel.source)
-                tgt = str(rel.target)
-                src_id = id_map.get(src, src)
-                tgt_id = id_map.get(tgt, tgt)
-                if src_id in node_ids and tgt_id in node_ids:
-                    matched_count += 1
-                    edges.append({"source": src_id, "target": tgt_id, "type": rel.type.value})
-            logger.info("iter_relationships: %d raw, %d matched to nodes", raw_count, matched_count)
-        except Exception as e:
-            logger.warning("iter_relationships failed: %s", e)
-
-        # Fallback: try KuzuBackend directly for edge counts
-        if not edges:
+        viz_edge_types = [RelType.CALLS, RelType.IMPORTS, RelType.EXTENDS,
+                          RelType.IMPLEMENTS, RelType.USES_TYPE, RelType.COUPLED_WITH]
+        for rel_type in viz_edge_types:
             try:
-                for rel_type in [r for r in RelType]:
-                    rels = kg.get_relationships_by_type(rel_type)
-                    count = len(rels) if isinstance(rels, (list, dict)) else 0
-                    if count > 0:
-                        logger.info("  RelType %s: %d edges", rel_type.value, count)
+                rels = kg.get_relationships_by_type(rel_type)
+                rel_items = rels if isinstance(rels, list) else list(rels.values()) if isinstance(rels, dict) else []
+                for rel in rel_items:
+                    src = str(rel.source)
+                    tgt = str(rel.target)
+                    src_id = id_map.get(src, src)
+                    tgt_id = id_map.get(tgt, tgt)
+                    if src_id in node_ids and tgt_id in node_ids:
+                        edges.append({"source": src_id, "target": tgt_id, "type": rel_type.value})
             except Exception as e:
-                logger.debug("RelType enumeration failed: %s", e)
+                logger.debug("RelType %s failed: %s", rel_type.value, e)
 
         # Collect communities as clusters
         try:

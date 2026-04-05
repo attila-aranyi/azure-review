@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 19 — clean analyze + diagnostic edge logging
+// axon test 20 — use get_relationships_by_type for edges
