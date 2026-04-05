@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 25 — debug ID format mismatch
+// axon test 26 — use iter_nodes with full axon IDs for edge matching

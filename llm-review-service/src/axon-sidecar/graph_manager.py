@@ -312,38 +312,35 @@ def get_graph_data(tenant_id: str, repo_id: str, repo_path: str) -> dict:
         id_map: dict[str, str] = {}
         node_ids: set[str] = set()
 
-        symbol_labels = [NodeLabel.FUNCTION, NodeLabel.CLASS, NodeLabel.METHOD,
-                         NodeLabel.INTERFACE, NodeLabel.TYPE_ALIAS, NodeLabel.ENUM]
-        for label in symbol_labels:
-            label_nodes = kg.get_nodes_by_label(label)
-            items = label_nodes.items() if isinstance(label_nodes, dict) else enumerate(label_nodes)
-            for key, node in items:
-                name = str(key) if isinstance(label_nodes, dict) else (getattr(node, "name", None) or getattr(node, "class_name", None) or str(key))
-                file = getattr(node, "file_path", "") or ""
-                uid = f"{file}::{name}" if file else name
-                axon_id = str(key) if isinstance(label_nodes, dict) else name
-                id_map[axon_id] = uid
-                node_ids.add(uid)
-                nodes.append({"id": uid, "label": name, "type": label.value, "file": file, "cluster": 0})
+        # Collect ALL nodes via iter_nodes to get the full axon ID
+        symbol_labels = {NodeLabel.FUNCTION, NodeLabel.CLASS, NodeLabel.METHOD,
+                         NodeLabel.INTERFACE, NodeLabel.TYPE_ALIAS, NodeLabel.ENUM}
+        for node_id, node in kg.iter_nodes():
+            axon_id = str(node_id)  # e.g. "function:path/file.ts:myFunc"
+            label = getattr(node, "label", None)
+            # Determine node label from the axon_id prefix or node attributes
+            kind = "unknown"
+            for sl in symbol_labels:
+                if axon_id.startswith(sl.value + ":"):
+                    kind = sl.value
+                    break
+            if kind == "unknown":
+                continue  # skip file/folder/community nodes for visualization
+            name = getattr(node, "class_name", None) or axon_id.rsplit(":", 1)[-1] or axon_id
+            file = getattr(node, "file_path", "") or ""
+            uid = f"{file}::{name}" if file else name
+            id_map[axon_id] = uid
+            node_ids.add(uid)
+            nodes.append({"id": uid, "label": name, "type": kind, "file": file, "cluster": 0})
 
-        # Collect edges from in-memory graph
-        sample_logged = False
-        unmatched = 0
+        # Collect edges from in-memory graph (only between symbol nodes)
         for rel in kg.iter_relationships():
             src = str(rel.source)
             tgt = str(rel.target)
-            if not sample_logged:
-                logger.info("Sample rel: source=%r target=%r type=%s", src, tgt, rel.type.value)
-                logger.info("Sample id_map keys: %s", list(id_map.keys())[:5])
-                sample_logged = True
-            src_id = id_map.get(src, src)
-            tgt_id = id_map.get(tgt, tgt)
-            if src_id in node_ids and tgt_id in node_ids:
+            src_id = id_map.get(src)
+            tgt_id = id_map.get(tgt)
+            if src_id and tgt_id:
                 edges.append({"source": src_id, "target": tgt_id, "type": rel.type.value})
-            else:
-                unmatched += 1
-        if unmatched:
-            logger.info("Unmatched edges: %d (src/tgt not in node_ids)", unmatched)
 
         # Collect communities
         try:
