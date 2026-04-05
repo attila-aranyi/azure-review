@@ -317,37 +317,38 @@ def get_graph_data(tenant_id: str, repo_id: str, repo_path: str) -> dict:
         symbol_labels = [NodeLabel.FUNCTION, NodeLabel.CLASS, NodeLabel.METHOD,
                          NodeLabel.INTERFACE, NodeLabel.TYPE_ALIAS, NodeLabel.ENUM]
         for label in symbol_labels:
-            for node_id, node in kg.get_nodes_by_label(label).items():
-                name = node_id
-                file = node.file_path or ""
+            label_nodes = kg.get_nodes_by_label(label)
+            # Handle both dict and list returns
+            items = label_nodes.items() if isinstance(label_nodes, dict) else enumerate(label_nodes)
+            for key, node in items:
+                name = str(key) if isinstance(label_nodes, dict) else (getattr(node, "name", None) or getattr(node, "class_name", None) or str(key))
+                file = getattr(node, "file_path", "") or ""
                 kind = label.value
-                cluster = 0  # community detection done separately
                 uid = f"{file}::{name}" if file else name
-                nodes.append({"id": uid, "label": name, "type": kind, "file": file, "cluster": cluster})
+                nodes.append({"id": uid, "label": name, "type": kind, "file": file, "cluster": 0})
 
         # Collect edges
         edge_types = [RelType.CALLS, RelType.IMPORTS, RelType.INHERITS,
                       RelType.TYPE_REF, RelType.OVERRIDES]
         for rel_type in edge_types:
             try:
-                for rel in kg.get_relationships_by_type(rel_type):
-                    src_file = ""
-                    tgt_file = ""
-                    src_node = kg.get_nodes_by_label(None).get(rel.source) if hasattr(rel, "source") else None
-                    if src_node:
-                        src_file = src_node.file_path or ""
-                    tgt_node = kg.get_nodes_by_label(None).get(rel.target) if hasattr(rel, "target") else None
-                    if tgt_node:
-                        tgt_file = tgt_node.file_path or ""
-                    src_id = f"{src_file}::{rel.source}" if src_file else str(rel.source)
-                    tgt_id = f"{tgt_file}::{rel.target}" if tgt_file else str(rel.target)
-                    edges.append({"source": src_id, "target": tgt_id, "type": rel_type.value})
-            except Exception:
-                pass
+                rels = kg.get_relationships_by_type(rel_type)
+                rel_items = rels if isinstance(rels, list) else list(rels.values()) if isinstance(rels, dict) else []
+                for rel in rel_items:
+                    src = getattr(rel, "source", getattr(rel, "src", ""))
+                    tgt = getattr(rel, "target", getattr(rel, "dst", ""))
+                    edges.append({"source": str(src), "target": str(tgt), "type": rel_type.value})
+            except Exception as e:
+                logger.debug("Edge type %s failed: %s", rel_type, e)
 
         # Collect communities as clusters
-        for node_id, node in kg.get_nodes_by_label(NodeLabel.COMMUNITY).items():
-            clusters[len(clusters)] = 1
+        try:
+            communities = kg.get_nodes_by_label(NodeLabel.COMMUNITY)
+            comm_items = communities if isinstance(communities, list) else list(communities.values()) if isinstance(communities, dict) else []
+            for i, _node in enumerate(comm_items):
+                clusters[i] = 1
+        except Exception:
+            pass
 
     except Exception as e:
         logger.error("Failed to read graph from kuzu: %s", e, exc_info=True)

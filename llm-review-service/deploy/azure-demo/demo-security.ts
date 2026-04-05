@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 16 — use KuzuBackend to read graph directly
+// axon test 17 — fix list vs dict handling in KuzuBackend
