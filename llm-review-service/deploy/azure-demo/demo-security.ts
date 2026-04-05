@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 26 — use iter_nodes with full axon IDs for edge matching
+// axon test 27 — sidecar v18 stable, re-trigger for indexing + edges
