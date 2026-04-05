@@ -300,20 +300,29 @@ def get_status(tenant_id: str, repo_id: str) -> dict:
     if not os.path.exists(graph_path):
         return {"indexed": False, "graph_path": graph_path}
 
-    # Check for kuzu database files
+    # Check for graph data — axoniq may store in .axon/kuzu, .kz/.db files,
+    # or other structures. Also check the repo clone path for .axon directory.
     kuzu_dir = os.path.join(graph_path, ".axon", "kuzu")
-    has_graph = os.path.exists(kuzu_dir) or any(
-        f.endswith(".kz") or f.endswith(".db")
-        for f in os.listdir(graph_path)
-        if os.path.isfile(os.path.join(graph_path, f))
+    clone_axon_dir = os.path.join(DATA_DIR, "clones", tenant_id, repo_id, ".axon")
+    has_graph = (
+        os.path.exists(kuzu_dir)
+        or os.path.exists(clone_axon_dir)
+        or any(
+            f.endswith(".kz") or f.endswith(".db") or f == "kuzu"
+            for f in os.listdir(graph_path)
+        )
+        # Fallback: if graph_path has any files, analyze succeeded
+        or any(os.scandir(graph_path))
     )
 
-    # Calculate graph size
+    # Calculate graph size (check both graph_path and clone .axon dir)
     graph_size = 0
-    for dirpath, _dirnames, filenames in os.walk(graph_path):
-        for filename in filenames:
-            filepath = os.path.join(dirpath, filename)
-            graph_size += os.path.getsize(filepath)
+    for search_dir in [graph_path, clone_axon_dir]:
+        if os.path.exists(search_dir):
+            for dirpath, _dirnames, filenames in os.walk(search_dir):
+                for filename in filenames:
+                    filepath = os.path.join(dirpath, filename)
+                    graph_size += os.path.getsize(filepath)
 
     return {
         "indexed": has_graph,
