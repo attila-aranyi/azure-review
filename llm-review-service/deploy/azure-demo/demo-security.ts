@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 13 — sidecar v5 with fixed graph status detection
+// axon test 14 — graph-data endpoint returns nodes/edges/clusters

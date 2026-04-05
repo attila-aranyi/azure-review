@@ -227,6 +227,19 @@ async def get_dead_code(tenant_id: str, repo_id: str):
     )
 
 
+# ---------- Graph Data ----------
+
+
+@app.get("/repos/{tenant_id}/{repo_id}/graph-data")
+async def get_graph_data(tenant_id: str, repo_id: str):
+    """Return full graph with nodes, edges, and clusters for visualization."""
+    repo_path = repo_manager.get_clone_path(tenant_id, repo_id)
+    if not repo_path:
+        raise HTTPException(status_code=404, detail="Repo not indexed")
+
+    return graph_manager.get_graph_data(tenant_id, repo_id, repo_path)
+
+
 # ---------- Status / Delete ----------
 
 

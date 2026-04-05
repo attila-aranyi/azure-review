@@ -59,7 +59,12 @@ export const registerGraphRoutes: FastifyPluginAsync<{
       if (!status?.indexed) {
         return reply.code(404).send({ error: "Repository not indexed. Trigger a review first." });
       }
-      return { indexed: true, graphSizeBytes: status.graph_size_bytes };
+      // Return full graph data for visualization
+      const graphData = await client.getGraphData(tenantId, repoId);
+      if (!graphData) {
+        return { nodes: [], edges: [], clusters: [] };
+      }
+      return graphData;
     } catch (err) {
       app.log.warn({ err, repoId }, "Axon graph fetch failed");
       return reply.code(502).send({ error: "Failed to fetch graph from Axon sidecar" });
