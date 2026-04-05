@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 20 — use get_relationships_by_type for edges
+// axon test 21 — raw cypher edge queries via KuzuBackend

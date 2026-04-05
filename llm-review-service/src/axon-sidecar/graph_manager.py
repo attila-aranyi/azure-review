@@ -330,23 +330,24 @@ def get_graph_data(tenant_id: str, repo_id: str, repo_path: str) -> dict:
                 id_map[axon_id] = uid
                 nodes.append({"id": uid, "label": name, "type": kind, "file": file, "cluster": 0})
 
-        # Collect edges via get_relationships_by_type (iter_relationships doesn't populate from kuzu)
+        # Query edges directly from KuzuBackend (load_graph only loads nodes)
         node_ids = {n["id"] for n in nodes}
         viz_edge_types = [RelType.CALLS, RelType.IMPORTS, RelType.EXTENDS,
                           RelType.IMPLEMENTS, RelType.USES_TYPE, RelType.COUPLED_WITH]
         for rel_type in viz_edge_types:
             try:
-                rels = kg.get_relationships_by_type(rel_type)
-                rel_items = rels if isinstance(rels, list) else list(rels.values()) if isinstance(rels, dict) else []
-                for rel in rel_items:
-                    src = str(rel.source)
-                    tgt = str(rel.target)
+                rels = backend.execute_raw(
+                    f"MATCH (a)-[r:{rel_type.value}]->(b) RETURN a.id, b.id LIMIT 5000"
+                )
+                for row in rels:
+                    src = str(row[0])
+                    tgt = str(row[1])
                     src_id = id_map.get(src, src)
                     tgt_id = id_map.get(tgt, tgt)
                     if src_id in node_ids and tgt_id in node_ids:
                         edges.append({"source": src_id, "target": tgt_id, "type": rel_type.value})
             except Exception as e:
-                logger.debug("RelType %s failed: %s", rel_type.value, e)
+                logger.debug("Cypher edge query for %s failed: %s", rel_type.value, e)
 
         # Collect communities as clusters
         try:
