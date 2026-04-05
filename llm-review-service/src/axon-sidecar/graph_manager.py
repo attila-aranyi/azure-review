@@ -291,31 +291,27 @@ def get_dead_code(
 def get_graph_data(tenant_id: str, repo_id: str, repo_path: str) -> dict:
     """Return the full graph for visualization: nodes, edges, clusters.
 
-    Uses axon's KuzuBackend to read the persisted graph directly.
+    Runs axon's pipeline in-process to get the in-memory KnowledgeGraph
+    with both nodes AND edges (kuzu only persists nodes).
     """
     from pathlib import Path as _Path
-    from axon.core.storage.kuzu_backend import KuzuBackend
-    from axon.core.graph.graph import NodeLabel, RelType
+    from axon.core.ingestion.pipeline import run_pipeline
+    from axon.core.graph.graph import NodeLabel
 
     nodes = []
     edges = []
     clusters: dict[int, int] = {}
 
-    # axon stores its DB in <repo>/.axon/kuzu
-    axon_db_path = _Path(repo_path) / ".axon" / "kuzu"
-    if not axon_db_path.exists():
-        logger.warning("No axon kuzu DB at %s", axon_db_path)
-        return {"nodes": [], "edges": [], "clusters": []}
-
-    backend = KuzuBackend()
     try:
-        backend.initialize(axon_db_path, read_only=True)
-        kg = backend.load_graph()
+        kg, result = run_pipeline(_Path(repo_path), storage=None, embeddings=False)
+
+        logger.info("Pipeline result: %d nodes, %d rels",
+                     kg.node_count, kg.relationship_count)
 
         # Build node ID lookup: axon_id -> viz_id
         id_map: dict[str, str] = {}
+        node_ids: set[str] = set()
 
-        # Collect nodes (functions, classes, methods, etc.)
         symbol_labels = [NodeLabel.FUNCTION, NodeLabel.CLASS, NodeLabel.METHOD,
                          NodeLabel.INTERFACE, NodeLabel.TYPE_ALIAS, NodeLabel.ENUM]
         for label in symbol_labels:
@@ -324,38 +320,20 @@ def get_graph_data(tenant_id: str, repo_id: str, repo_path: str) -> dict:
             for key, node in items:
                 name = str(key) if isinstance(label_nodes, dict) else (getattr(node, "name", None) or getattr(node, "class_name", None) or str(key))
                 file = getattr(node, "file_path", "") or ""
-                kind = label.value
                 uid = f"{file}::{name}" if file else name
                 axon_id = str(key) if isinstance(label_nodes, dict) else name
                 id_map[axon_id] = uid
-                nodes.append({"id": uid, "label": name, "type": kind, "file": file, "cluster": 0})
+                node_ids.add(uid)
+                nodes.append({"id": uid, "label": name, "type": label.value, "file": file, "cluster": 0})
 
-        # Discover actual relationship tables from kuzu schema, then query edges
-        node_ids = {n["id"] for n in nodes}
-        try:
-            # List all relationship tables
-            tables = backend.execute_raw("CALL show_tables() RETURN *")
-            rel_tables = [row[0] for row in tables if len(row) > 1 and row[1] == "REL"]
-            logger.info("Kuzu relationship tables: %s", rel_tables)
+        # Collect edges from in-memory graph
+        for rel in kg.iter_relationships():
+            src_id = id_map.get(str(rel.source), str(rel.source))
+            tgt_id = id_map.get(str(rel.target), str(rel.target))
+            if src_id in node_ids and tgt_id in node_ids:
+                edges.append({"source": src_id, "target": tgt_id, "type": rel.type.value})
 
-            for table_name in rel_tables:
-                try:
-                    rels = backend.execute_raw(
-                        f"MATCH (a)-[r:`{table_name}`]->(b) RETURN a.id, b.id LIMIT 5000"
-                    )
-                    for row in rels:
-                        src = str(row[0])
-                        tgt = str(row[1])
-                        src_id = id_map.get(src, src)
-                        tgt_id = id_map.get(tgt, tgt)
-                        if src_id in node_ids and tgt_id in node_ids:
-                            edges.append({"source": src_id, "target": tgt_id, "type": table_name})
-                except Exception as e:
-                    logger.warning("Edge query for table %s failed: %s", table_name, e)
-        except Exception as e:
-            logger.warning("Schema discovery failed: %s", e)
-
-        # Collect communities as clusters
+        # Collect communities
         try:
             communities = kg.get_nodes_by_label(NodeLabel.COMMUNITY)
             comm_items = communities if isinstance(communities, list) else list(communities.values()) if isinstance(communities, dict) else []
@@ -365,12 +343,7 @@ def get_graph_data(tenant_id: str, repo_id: str, repo_path: str) -> dict:
             pass
 
     except Exception as e:
-        logger.error("Failed to read graph from kuzu: %s", e, exc_info=True)
-    finally:
-        try:
-            backend.close()
-        except Exception:
-            pass
+        logger.error("Pipeline run failed: %s", e, exc_info=True)
 
     cluster_list = [{"id": k, "size": v} for k, v in sorted(clusters.items())]
     logger.info("Graph data: %d nodes, %d edges, %d clusters", len(nodes), len(edges), len(cluster_list))

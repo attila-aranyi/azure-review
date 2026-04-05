@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 23 — discover kuzu rel tables dynamically
+// axon test 24 — run_pipeline in-process for edges
