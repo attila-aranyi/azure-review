@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 21 — raw cypher edge queries via KuzuBackend
+// axon test 22 — v14 with warning-level edge debug logging

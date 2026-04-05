@@ -347,7 +347,7 @@ def get_graph_data(tenant_id: str, repo_id: str, repo_path: str) -> dict:
                     if src_id in node_ids and tgt_id in node_ids:
                         edges.append({"source": src_id, "target": tgt_id, "type": rel_type.value})
             except Exception as e:
-                logger.debug("Cypher edge query for %s failed: %s", rel_type.value, e)
+                logger.warning("Cypher edge query for %s failed: %s", rel_type.value, e)
 
         # Collect communities as clusters
         try:
