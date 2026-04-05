@@ -315,8 +315,8 @@ def get_graph_data(tenant_id: str, repo_id: str, repo_path: str) -> dict:
         # Collect ALL nodes via iter_nodes to get the full axon ID
         symbol_labels = {NodeLabel.FUNCTION, NodeLabel.CLASS, NodeLabel.METHOD,
                          NodeLabel.INTERFACE, NodeLabel.TYPE_ALIAS, NodeLabel.ENUM}
-        for node_id, node in kg.iter_nodes():
-            axon_id = str(node_id)  # e.g. "function:path/file.ts:myFunc"
+        for node in kg.iter_nodes():
+            axon_id = getattr(node, "id", None) or str(node)  # e.g. "function:path/file.ts:myFunc"
             label = getattr(node, "label", None)
             # Determine node label from the axon_id prefix or node attributes
             kind = "unknown"

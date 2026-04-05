@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 27 — sidecar v18 stable, re-trigger for indexing + edges
+// axon test 28 — fix iter_nodes unpacking
