@@ -292,89 +292,66 @@ def get_dead_code(
 def get_graph_data(tenant_id: str, repo_id: str, repo_path: str) -> dict:
     """Return the full graph for visualization: nodes, edges, clusters.
 
-    Uses 'axon query' or falls back to reading the graph database directly.
+    Uses axoniq Python API directly instead of CLI commands.
     """
-    graph_path = _graph_path(tenant_id, repo_id)
-
-    # Try axon cypher to get all symbols
     nodes = []
     edges = []
     clusters: dict[int, int] = {}
 
     try:
-        # Get all symbols via axon query
-        output = _run_axon(
-            ["cypher", "MATCH (s:Symbol) RETURN s.name, s.kind, s.file, s.cluster_id LIMIT 2000"],
-            cwd=repo_path,
-            env_extra={"AXON_GRAPH_DIR": graph_path},
-            timeout=30,
-        )
-        for line in output.strip().split("\n"):
-            if not line.strip() or line.startswith("┌") or line.startswith("├") or line.startswith("└") or line.startswith("│ s."):
-                continue
-            parts = [p.strip() for p in line.strip("│ \n").split("│")]
-            if len(parts) >= 3:
-                name = parts[0].strip()
-                kind = parts[1].strip() if len(parts) > 1 else "unknown"
-                file = parts[2].strip() if len(parts) > 2 else ""
-                cluster = int(parts[3].strip()) if len(parts) > 3 and parts[3].strip().isdigit() else 0
-                node_id = f"{file}::{name}" if file else name
-                nodes.append({"id": node_id, "label": name, "type": kind, "file": file, "cluster": cluster})
-                clusters[cluster] = clusters.get(cluster, 0) + 1
-    except AxonError as e:
-        logger.warning("cypher query for nodes failed: %s", e)
+        import axoniq
 
-    # If cypher didn't work, try 'axon query' with a broad search
-    if not nodes:
+        # Use axoniq Python API to read the indexed graph
+        ax = axoniq.load(repo_path)
+        symbols = ax.symbols() if hasattr(ax, "symbols") else []
+
+        for sym in symbols:
+            name = getattr(sym, "name", str(sym))
+            kind = getattr(sym, "kind", "unknown")
+            file = getattr(sym, "file", "")
+            cluster = getattr(sym, "cluster_id", getattr(sym, "cluster", 0)) or 0
+            node_id = f"{file}::{name}" if file else name
+            nodes.append({"id": node_id, "label": name, "type": kind, "file": file, "cluster": cluster})
+            clusters[cluster] = clusters.get(cluster, 0) + 1
+
+            # Get edges from callers/callees
+            callees = getattr(sym, "callees", None)
+            if callees:
+                for callee in callees:
+                    callee_name = getattr(callee, "name", str(callee))
+                    callee_file = getattr(callee, "file", "")
+                    tgt_id = f"{callee_file}::{callee_name}" if callee_file else callee_name
+                    edges.append({"source": node_id, "target": tgt_id, "type": "CALLS"})
+
+    except Exception as e:
+        logger.warning("axoniq Python API failed, trying CLI: %s", e)
+
+        # Fallback: try axon CLI commands
+        graph_path = _graph_path(tenant_id, repo_id)
         try:
+            # Try 'axon query' to list all symbols
             output = _run_axon(
-                ["query", "*", "--output-format", "json", "--limit", "2000"],
+                ["query", "--all", "--output-format", "json"],
                 cwd=repo_path,
                 env_extra={"AXON_GRAPH_DIR": graph_path},
-                timeout=30,
+                timeout=60,
             )
             import json as _json
             data = _json.loads(output)
-            for item in data.get("results", data) if isinstance(data, dict) else data:
-                name = item.get("name", item.get("symbol", ""))
+            items = data if isinstance(data, list) else data.get("results", data.get("symbols", []))
+            for item in items:
+                name = item.get("name", "")
                 kind = item.get("kind", item.get("type", "unknown"))
                 file = item.get("file", "")
-                cluster = item.get("cluster_id", item.get("cluster", 0))
+                cluster = item.get("cluster_id", item.get("cluster", 0)) or 0
                 node_id = f"{file}::{name}" if file else name
-                nodes.append({"id": node_id, "label": name, "type": kind, "file": file, "cluster": cluster or 0})
-                c = cluster or 0
-                clusters[c] = clusters.get(c, 0) + 1
-        except (AxonError, Exception) as e:
-            logger.warning("axon query for graph data failed: %s", e)
-
-    # Try to get edges
-    try:
-        output = _run_axon(
-            ["cypher", "MATCH (a:Symbol)-[r]->(b:Symbol) RETURN a.name, a.file, type(r), b.name, b.file LIMIT 5000"],
-            cwd=repo_path,
-            env_extra={"AXON_GRAPH_DIR": graph_path},
-            timeout=30,
-        )
-        for line in output.strip().split("\n"):
-            if not line.strip() or line.startswith("┌") or line.startswith("├") or line.startswith("└") or line.startswith("│ a."):
-                continue
-            parts = [p.strip() for p in line.strip("│ \n").split("│")]
-            if len(parts) >= 4:
-                src_name = parts[0].strip()
-                src_file = parts[1].strip() if len(parts) > 1 else ""
-                rel_type = parts[2].strip() if len(parts) > 2 else "DEPENDS_ON"
-                tgt_name = parts[3].strip() if len(parts) > 3 else ""
-                tgt_file = parts[4].strip() if len(parts) > 4 else ""
-                src_id = f"{src_file}::{src_name}" if src_file else src_name
-                tgt_id = f"{tgt_file}::{tgt_name}" if tgt_file else tgt_name
-                edges.append({"source": src_id, "target": tgt_id, "type": rel_type})
-    except AxonError as e:
-        logger.warning("cypher query for edges failed: %s", e)
+                nodes.append({"id": node_id, "label": name, "type": kind, "file": file, "cluster": cluster})
+                clusters[cluster] = clusters.get(cluster, 0) + 1
+        except Exception as e2:
+            logger.warning("CLI fallback also failed: %s", e2)
 
     cluster_list = [{"id": k, "size": v} for k, v in sorted(clusters.items())]
-
     logger.info("Graph data: %d nodes, %d edges, %d clusters", len(nodes), len(edges), len(cluster_list))
-
     return {"nodes": nodes, "edges": edges, "clusters": cluster_list}
 
 
