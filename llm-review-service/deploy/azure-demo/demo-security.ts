@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 22 — v14 with warning-level edge debug logging
+// axon test 23 — discover kuzu rel tables dynamically

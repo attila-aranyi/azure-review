@@ -330,24 +330,30 @@ def get_graph_data(tenant_id: str, repo_id: str, repo_path: str) -> dict:
                 id_map[axon_id] = uid
                 nodes.append({"id": uid, "label": name, "type": kind, "file": file, "cluster": 0})
 
-        # Query edges directly from KuzuBackend (load_graph only loads nodes)
+        # Discover actual relationship tables from kuzu schema, then query edges
         node_ids = {n["id"] for n in nodes}
-        viz_edge_types = [RelType.CALLS, RelType.IMPORTS, RelType.EXTENDS,
-                          RelType.IMPLEMENTS, RelType.USES_TYPE, RelType.COUPLED_WITH]
-        for rel_type in viz_edge_types:
-            try:
-                rels = backend.execute_raw(
-                    f"MATCH (a)-[r:{rel_type.value}]->(b) RETURN a.id, b.id LIMIT 5000"
-                )
-                for row in rels:
-                    src = str(row[0])
-                    tgt = str(row[1])
-                    src_id = id_map.get(src, src)
-                    tgt_id = id_map.get(tgt, tgt)
-                    if src_id in node_ids and tgt_id in node_ids:
-                        edges.append({"source": src_id, "target": tgt_id, "type": rel_type.value})
-            except Exception as e:
-                logger.warning("Cypher edge query for %s failed: %s", rel_type.value, e)
+        try:
+            # List all relationship tables
+            tables = backend.execute_raw("CALL show_tables() RETURN *")
+            rel_tables = [row[0] for row in tables if len(row) > 1 and row[1] == "REL"]
+            logger.info("Kuzu relationship tables: %s", rel_tables)
+
+            for table_name in rel_tables:
+                try:
+                    rels = backend.execute_raw(
+                        f"MATCH (a)-[r:`{table_name}`]->(b) RETURN a.id, b.id LIMIT 5000"
+                    )
+                    for row in rels:
+                        src = str(row[0])
+                        tgt = str(row[1])
+                        src_id = id_map.get(src, src)
+                        tgt_id = id_map.get(tgt, tgt)
+                        if src_id in node_ids and tgt_id in node_ids:
+                            edges.append({"source": src_id, "target": tgt_id, "type": table_name})
+                except Exception as e:
+                    logger.warning("Edge query for table %s failed: %s", table_name, e)
+        except Exception as e:
+            logger.warning("Schema discovery failed: %s", e)
 
         # Collect communities as clusters
         try:
