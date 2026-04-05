@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 18 — edges via iter_relationships with id_map
+// axon test 19 — clean analyze + diagnostic edge logging

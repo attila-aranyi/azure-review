@@ -102,20 +102,19 @@ def analyze(
     start = time.monotonic()
 
     try:
+        # Run axon analyze from within the repo dir (axon stores graph in .axon/kuzu)
         output = _run_axon(
-            ["analyze", repo_path, "--output-format", "json"],
+            ["analyze", "."],
             cwd=repo_path,
             timeout=ANALYZE_TIMEOUT,
-            env_extra={"AXON_GRAPH_DIR": graph_path},
         )
     except AxonError:
-        # Retry without JSON output format (fallback for older axon versions)
+        # Retry with explicit path
         try:
             output = _run_axon(
                 ["analyze", repo_path],
                 cwd=repo_path,
                 timeout=ANALYZE_TIMEOUT,
-                env_extra={"AXON_GRAPH_DIR": graph_path},
             )
         except AxonError as e:
             logger.error("axon analyze failed: %s (returncode=%d, stderr=%s)", e, e.returncode, e.stderr)
@@ -333,17 +332,34 @@ def get_graph_data(tenant_id: str, repo_id: str, repo_path: str) -> dict:
 
         # Collect ALL edges via iter_relationships
         node_ids = {n["id"] for n in nodes}
+        total_rels = kg.relationship_count
+        logger.info("KnowledgeGraph reports %d relationships", total_rels)
         try:
+            raw_count = 0
+            matched_count = 0
             for rel in kg.iter_relationships():
+                raw_count += 1
                 src = str(rel.source)
                 tgt = str(rel.target)
                 src_id = id_map.get(src, src)
                 tgt_id = id_map.get(tgt, tgt)
-                # Only include edges where both endpoints exist as nodes
                 if src_id in node_ids and tgt_id in node_ids:
+                    matched_count += 1
                     edges.append({"source": src_id, "target": tgt_id, "type": rel.type.value})
+            logger.info("iter_relationships: %d raw, %d matched to nodes", raw_count, matched_count)
         except Exception as e:
             logger.warning("iter_relationships failed: %s", e)
+
+        # Fallback: try KuzuBackend directly for edge counts
+        if not edges:
+            try:
+                for rel_type in [r for r in RelType]:
+                    rels = kg.get_relationships_by_type(rel_type)
+                    count = len(rels) if isinstance(rels, (list, dict)) else 0
+                    if count > 0:
+                        logger.info("  RelType %s: %d edges", rel_type.value, count)
+            except Exception as e:
+                logger.debug("RelType enumeration failed: %s", e)
 
         # Collect communities as clusters
         try:
