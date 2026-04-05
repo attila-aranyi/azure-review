@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 17 — fix list vs dict handling in KuzuBackend
+// axon test 18 — edges via iter_relationships with id_map

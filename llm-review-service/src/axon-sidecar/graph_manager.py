@@ -313,33 +313,37 @@ def get_graph_data(tenant_id: str, repo_id: str, repo_path: str) -> dict:
         backend.initialize(axon_db_path, read_only=True)
         kg = backend.load_graph()
 
+        # Build node ID lookup: axon_id -> viz_id
+        id_map: dict[str, str] = {}
+
         # Collect nodes (functions, classes, methods, etc.)
         symbol_labels = [NodeLabel.FUNCTION, NodeLabel.CLASS, NodeLabel.METHOD,
                          NodeLabel.INTERFACE, NodeLabel.TYPE_ALIAS, NodeLabel.ENUM]
         for label in symbol_labels:
             label_nodes = kg.get_nodes_by_label(label)
-            # Handle both dict and list returns
             items = label_nodes.items() if isinstance(label_nodes, dict) else enumerate(label_nodes)
             for key, node in items:
                 name = str(key) if isinstance(label_nodes, dict) else (getattr(node, "name", None) or getattr(node, "class_name", None) or str(key))
                 file = getattr(node, "file_path", "") or ""
                 kind = label.value
                 uid = f"{file}::{name}" if file else name
+                axon_id = str(key) if isinstance(label_nodes, dict) else name
+                id_map[axon_id] = uid
                 nodes.append({"id": uid, "label": name, "type": kind, "file": file, "cluster": 0})
 
-        # Collect edges
-        edge_types = [RelType.CALLS, RelType.IMPORTS, RelType.INHERITS,
-                      RelType.TYPE_REF, RelType.OVERRIDES]
-        for rel_type in edge_types:
-            try:
-                rels = kg.get_relationships_by_type(rel_type)
-                rel_items = rels if isinstance(rels, list) else list(rels.values()) if isinstance(rels, dict) else []
-                for rel in rel_items:
-                    src = getattr(rel, "source", getattr(rel, "src", ""))
-                    tgt = getattr(rel, "target", getattr(rel, "dst", ""))
-                    edges.append({"source": str(src), "target": str(tgt), "type": rel_type.value})
-            except Exception as e:
-                logger.debug("Edge type %s failed: %s", rel_type, e)
+        # Collect ALL edges via iter_relationships
+        node_ids = {n["id"] for n in nodes}
+        try:
+            for rel in kg.iter_relationships():
+                src = str(rel.source)
+                tgt = str(rel.target)
+                src_id = id_map.get(src, src)
+                tgt_id = id_map.get(tgt, tgt)
+                # Only include edges where both endpoints exist as nodes
+                if src_id in node_ids and tgt_id in node_ids:
+                    edges.append({"source": src_id, "target": tgt_id, "type": rel.type.value})
+        except Exception as e:
+            logger.warning("iter_relationships failed: %s", e)
 
         # Collect communities as clusters
         try:
