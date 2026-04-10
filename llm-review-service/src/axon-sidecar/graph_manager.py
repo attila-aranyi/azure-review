@@ -135,11 +135,17 @@ def analyze(
         tenant_id, repo_id, duration_ms, stats,
     )
 
+    # Read dead code from the freshly-built kuzu DB (fast, no re-analysis)
+    dead_result = get_dead_code(tenant_id, repo_id, repo_path)
+    dead_count = len(dead_result.get("dead_symbols", []))
+
     return {
         "status": "ready",
         "duration_ms": duration_ms,
         "graph_path": graph_path,
+        "dead_symbols": dead_result.get("dead_symbols", []),
         **stats,
+        "dead_code_count": dead_count,
     }
 
 
@@ -379,28 +385,16 @@ def _classify_dead_symbol(
     return ("medium", "No callers found but static analysis may be incomplete", False)
 
 
-def get_dead_code(
-    tenant_id: str,
-    repo_id: str,
-    repo_path: str,
-) -> dict:
-    """Detect dead/unreachable code in the repository.
+def _scan_dead_nodes(kg: object) -> list[dict]:
+    """Extract dead symbols from a KnowledgeGraph and classify them.
 
-    Runs the pipeline in-process, reads node.is_dead, and classifies
-    each dead symbol with confidence and reason.
-
-    Returns:
-        dict with dead_symbols list (enriched with confidence/reason/safeToDelete)
+    Shared between get_dead_code (fast path) and get_graph_data (full pipeline).
     """
-    kg = _get_cached_kg(repo_path)
-    if kg is None:
-        return {"dead_symbols": []}
-
-    dead_symbols = []
     from axon.core.graph.graph import NodeLabel
     symbol_labels = {NodeLabel.FUNCTION, NodeLabel.CLASS, NodeLabel.METHOD,
                      NodeLabel.INTERFACE, NodeLabel.TYPE_ALIAS, NodeLabel.ENUM}
 
+    dead_symbols = []
     for node in kg.iter_nodes():
         if not getattr(node, "is_dead", False):
             continue
@@ -435,9 +429,53 @@ def get_dead_code(
             "line": line,
         })
 
-    # Sort: high confidence first, then medium, then low
     order = {"high": 0, "medium": 1, "low": 2}
     dead_symbols.sort(key=lambda s: (order.get(s["confidence"], 3), s["file"], s["name"]))
+    return dead_symbols
+
+
+def get_dead_code(
+    tenant_id: str,
+    repo_id: str,
+    repo_path: str,
+) -> dict:
+    """Detect dead/unreachable code in the repository.
+
+    Fast path: reads nodes from kuzu (persisted by axon analyze).
+    Fallback: uses the in-process pipeline cache.
+    Does NOT re-run the full pipeline — only needs node data with is_dead flags.
+
+    Returns:
+        dict with dead_symbols list (enriched with confidence/reason/safeToDelete)
+    """
+    kg = None
+
+    # Fast path: read from kuzu (already populated by axon analyze)
+    from pathlib import Path as _Path
+    axon_db_path = _Path(repo_path) / ".axon" / "kuzu"
+    if axon_db_path.exists():
+        try:
+            from axon.core.storage.kuzu_backend import KuzuBackend
+            backend = KuzuBackend()
+            backend.initialize(axon_db_path, read_only=True)
+            kg = backend.load_graph()
+            logger.info("Dead code: reading from kuzu (%d nodes)", kg.node_count)
+        except Exception as e:
+            logger.warning("Kuzu read failed, falling back to pipeline cache: %s", e)
+            kg = None
+        finally:
+            try:
+                backend.close()
+            except Exception:
+                pass
+
+    # Fallback: use pipeline cache (may already be warm from get_graph_data)
+    if kg is None:
+        kg = _get_cached_kg(repo_path)
+    if kg is None:
+        return {"dead_symbols": []}
+
+    dead_symbols = _scan_dead_nodes(kg)
 
     logger.info("Dead code: %d total (%d high, %d medium, %d low)",
                 len(dead_symbols),
