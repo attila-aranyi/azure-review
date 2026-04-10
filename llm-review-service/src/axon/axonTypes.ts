@@ -32,6 +32,10 @@ export interface DeadSymbol {
   file: string;
   name: string;
   type: string;
+  confidence: "high" | "medium" | "low";
+  reason: string;
+  safeToDelete: boolean;
+  line?: number;
 }
 
 export interface IndexResult {
@@ -43,6 +47,8 @@ export interface IndexResult {
   clone_duration_ms: number;
   analyze_duration_ms: number;
   error?: string | null;
+  dead_symbols?: DeadSymbol[];
+  dead_code_count?: number;
 }
 
 export interface RepoStatus {

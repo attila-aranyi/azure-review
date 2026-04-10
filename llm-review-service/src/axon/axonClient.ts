@@ -125,6 +125,18 @@ export class AxonClient {
   }
 
   /**
+   * Get full graph data (nodes, edges, clusters) for visualization.
+   */
+  async getGraphData(
+    tenantId: string,
+    repoId: string,
+  ): Promise<{ nodes: unknown[]; edges: unknown[]; clusters: unknown[] } | null> {
+    return this._get<{ nodes: unknown[]; edges: unknown[]; clusters: unknown[] }>(
+      `/repos/${tenantId}/${repoId}/graph-data`,
+    );
+  }
+
+  /**
    * Check index status of a repository.
    */
   async getStatus(

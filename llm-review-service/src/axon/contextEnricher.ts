@@ -112,16 +112,31 @@ export async function enrichReview(
     }),
   );
 
-  // Step 5: Detect dead code
-  const deadCodeResult = await client.getDeadCode(tenantId, repoId);
-  const deadCode = deadCodeResult?.dead_symbols ?? [];
+  // Step 5: Dead code — read from index result (no extra HTTP call)
+  // Falls back to separate API call if index didn't include dead symbols
+  const allDeadCode = indexResult.dead_symbols?.length
+    ? indexResult.dead_symbols
+    : (await client.getDeadCode(tenantId, repoId))?.dead_symbols ?? [];
+
+  // Filter to files changed in this PR
+  const changedFiles = new Set(changedSymbols.map((s) => s.file));
+  for (const line of diff.split("\n")) {
+    const match = line.match(/^(?:diff --git a\/|[+]{3} b\/)(.+)/);
+    if (match) changedFiles.add(match[1]);
+  }
+
+  const deadCode = allDeadCode.filter(
+    (d) => changedFiles.has(d.file) || [...changedFiles].some((f) => d.file.endsWith(`/${f}`) || f.endsWith(`/${d.file}`)),
+  );
 
   logger.info(
     {
       changedSymbols: changedSymbols.length,
       impactQueried: impactBySymbol.size,
       contextQueried: contextBySymbol.size,
-      deadCodeFound: deadCode.length,
+      deadCodeInRepo: allDeadCode.length,
+      deadCodeInPR: deadCode.length,
+      deadCodeSource: indexResult.dead_symbols?.length ? "index" : "api",
     },
     "Axon enrichment complete",
   );

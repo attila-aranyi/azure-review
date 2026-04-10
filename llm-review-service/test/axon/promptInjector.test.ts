@@ -23,7 +23,7 @@ function makeContext(overrides?: Partial<StructuralContext>): StructuralContext 
       }],
     ]),
     deadCode: [
-      { file: "src/main.ts", name: "oldProcess", type: "function" },
+      { file: "src/main.ts", name: "oldProcess", type: "function", confidence: "high", reason: "Private function with no callers — safe to remove", safeToDelete: true },
     ],
     indexStatus: {
       status: "ready",
@@ -57,7 +57,7 @@ describe("formatHunkContext", () => {
     expect(result).toContain("confidence: 0.95");
     expect(result).toContain("Callers of `processData`");
     expect(result).toContain("Module: Data Processing");
-    expect(result).toContain("Dead Code Warning");
+    expect(result).toContain("Dead Code Detected");
     expect(result).toContain("`oldProcess`");
   });
 
@@ -92,7 +92,7 @@ describe("formatReviewSummary", () => {
     expect(result).toContain("200 edges");
     expect(result).toContain("1** symbols modified");
     expect(result).toContain("blast radius");
-    expect(result).toContain("1** potential dead code");
+    expect(result).toContain("1** dead code symbols in changed files");
   });
 
   it("handles zero context gracefully", () => {

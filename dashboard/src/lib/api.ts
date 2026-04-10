@@ -212,7 +212,17 @@ export type Project = {
 };
 
 export type GraphData = {
-  nodes: { id: string; label: string; type: string; file: string; cluster?: number }[];
+  nodes: {
+    id: string;
+    label: string;
+    type: string;
+    file: string;
+    cluster?: number;
+    isDead?: boolean;
+    deadConfidence?: "high" | "medium" | "low";
+    deadReason?: string;
+    safeToDelete?: boolean;
+  }[];
   edges: { source: string; target: string; type: string }[];
   clusters: { id: number; size: number }[];
 };
@@ -223,5 +233,13 @@ export type ImpactData = {
 };
 
 export type DeadCodeData = {
-  deadSymbols: { file: string; name: string; type: string }[];
+  deadSymbols: {
+    file: string;
+    name: string;
+    type: string;
+    confidence: "high" | "medium" | "low";
+    reason: string;
+    safeToDelete: boolean;
+    line?: number;
+  }[];
 };

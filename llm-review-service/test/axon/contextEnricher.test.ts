@@ -43,7 +43,7 @@ function mockAxonClient(overrides: Partial<AxonClient> = {}): AxonClient {
       community: { id: 1, name: "Core" },
     }),
     getDeadCode: vi.fn().mockResolvedValue({
-      dead_symbols: [{ file: "src/old.ts", name: "unused", type: "function" }],
+      dead_symbols: [{ file: "src/main.ts", name: "unused", type: "function", confidence: "high", reason: "No callers", safeToDelete: true }],
     }),
     ...overrides,
   } as unknown as AxonClient;
@@ -173,17 +173,41 @@ describe("enrichReview", () => {
     expect(result!.deadCode).toEqual([]);
   });
 
-  it("includes dead symbols from getDeadCode", async () => {
+  it("includes dead symbols from getDeadCode filtered to changed files", async () => {
     const client = mockAxonClient({
       getDeadCode: vi.fn().mockResolvedValue({
-        dead_symbols: [{ file: "src/dead.ts", name: "unusedFn", type: "function" }],
+        dead_symbols: [
+          { file: "src/main.ts", name: "unusedFn", type: "function", confidence: "high", reason: "No callers", safeToDelete: true },
+          { file: "src/unrelated.ts", name: "otherFn", type: "function", confidence: "high", reason: "No callers", safeToDelete: true },
+        ],
       }) as never,
     });
     const result = await enrichReview(client, baseOpts);
 
     expect(result).not.toBeNull();
+    // Only src/main.ts is in the diff — src/unrelated.ts should be filtered out
     expect(result!.deadCode).toHaveLength(1);
     expect(result!.deadCode[0].name).toBe("unusedFn");
+  });
+
+  it("reads dead code from index result when available (fast path)", async () => {
+    const client = mockAxonClient({
+      indexRepo: vi.fn().mockResolvedValue({
+        status: "ready", symbols: 100, edges: 200, clusters: 5,
+        duration_ms: 3000, clone_duration_ms: 1000, analyze_duration_ms: 2000,
+        dead_symbols: [
+          { file: "src/main.ts", name: "fromIndex", type: "function", confidence: "high", reason: "No callers", safeToDelete: true },
+        ],
+      }) as never,
+      getDeadCode: vi.fn().mockResolvedValue({ dead_symbols: [] }) as never,
+    });
+    const result = await enrichReview(client, baseOpts);
+
+    expect(result).not.toBeNull();
+    expect(result!.deadCode).toHaveLength(1);
+    expect(result!.deadCode[0].name).toBe("fromIndex");
+    // getDeadCode should NOT be called when index provides dead_symbols
+    expect(client.getDeadCode).not.toHaveBeenCalled();
   });
 
   it("returns null when reindex returns null", async () => {

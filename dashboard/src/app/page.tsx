@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/layout/app-shell";
-import { api, type UsageSummary, type DailyUsage, type Review } from "@/lib/api";
+import { api, type UsageSummary, type DailyUsage, type Review, type GraphData } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { AreaChart, DonutChart, Card, Metric, Text, Flex, ProgressBar, BadgeDelta } from "@tremor/react";
-import { Activity, Bug, Shield, Eye } from "lucide-react";
+import { Activity, Bug, Shield, Eye, HeartPulse } from "lucide-react";
+import Link from "next/link";
 
 function KpiCard({ title, value, icon: Icon, delta }: { title: string; value: string; icon: React.ElementType; delta?: string }) {
   return (
@@ -27,6 +28,7 @@ function DashboardContent() {
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [daily, setDaily] = useState<DailyUsage[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
+  const [health, setHealth] = useState<{ total: number; dead: number; high: number; medium: number; low: number; repoId: string } | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -39,8 +41,25 @@ function DashboardContent() {
     ]).then(([u, d, r]) => {
       setUsage(u);
       setDaily(d?.days ?? []);
-      setReviews(r?.data ?? []);
+      const revs = r?.data ?? [];
+      setReviews(revs);
       setLoading(false);
+
+      // Fetch code health from the first repo that has reviews
+      if (revs.length > 0) {
+        const repoId = revs[0].repoId;
+        api.getGraph(repoId).then((g: GraphData) => {
+          const dead = g.nodes.filter((n) => n.isDead);
+          setHealth({
+            total: g.nodes.length,
+            dead: dead.length,
+            high: dead.filter((n) => n.deadConfidence === "high").length,
+            medium: dead.filter((n) => n.deadConfidence === "medium").length,
+            low: dead.filter((n) => n.deadConfidence === "low").length,
+            repoId,
+          });
+        }).catch(() => {});
+      }
     });
   }, [authenticated]);
 
@@ -70,6 +89,47 @@ function DashboardContent() {
         <KpiCard title="Tokens Used" value={usage ? `${Math.round((usage.usage.tokensUsed ?? 0) / 1000)}k` : "0"} icon={Eye} />
         <KpiCard title="LLM Cost" value={usage ? `$${((usage.usage.llmCostCents ?? 0) / 100).toFixed(2)}` : "$0.00"} icon={Shield} />
       </div>
+
+      {health && health.dead > 0 && (
+        <Link href="/graph">
+          <Card className="bg-zinc-900 border-zinc-800 ring-0 hover:border-zinc-600 transition-colors cursor-pointer">
+            <Flex alignItems="start">
+              <div>
+                <Text className="text-zinc-400">Code Health</Text>
+                <div className="flex items-baseline gap-3 mt-1">
+                  <Metric className="text-white">{health.total - health.dead} <span className="text-base font-normal text-zinc-500">/ {health.total} symbols alive</span></Metric>
+                </div>
+                <div className="flex gap-4 mt-3 text-xs">
+                  {health.high > 0 && (
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-red-500" />
+                      <span className="text-red-400">{health.high} safe to remove</span>
+                    </span>
+                  )}
+                  {health.medium > 0 && (
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-orange-500" />
+                      <span className="text-orange-400">{health.medium} needs investigation</span>
+                    </span>
+                  )}
+                  {health.low > 0 && (
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-yellow-500" />
+                      <span className="text-yellow-400">{health.low} likely false positive</span>
+                    </span>
+                  )}
+                </div>
+                <ProgressBar
+                  value={health.total > 0 ? ((health.total - health.dead) / health.total) * 100 : 100}
+                  color="emerald"
+                  className="mt-3"
+                />
+              </div>
+              <HeartPulse className="h-8 w-8 text-zinc-600" />
+            </Flex>
+          </Card>
+        </Link>
+      )}
 
       {usage?.limits && (
         <Card className="bg-zinc-900 border-zinc-800 ring-0">
