@@ -76,7 +76,11 @@ export function formatReviewSummary(structuralContext: StructuralContext): strin
   }
 
   if (structuralContext.deadCode.length > 0) {
-    lines.push(`- **${structuralContext.deadCode.length}** potential dead code symbols detected`);
+    const high = structuralContext.deadCode.filter((d) => d.confidence === "high").length;
+    const medium = structuralContext.deadCode.filter((d) => d.confidence === "medium").length;
+    const low = structuralContext.deadCode.filter((d) => d.confidence === "low").length;
+    const parts = [high && `${high} high`, medium && `${medium} medium`, low && `${low} low`].filter(Boolean);
+    lines.push(`- **${structuralContext.deadCode.length}** dead code symbols detected (${parts.join(", ")})`);
   }
 
   return lines.join("\n");
@@ -132,13 +136,37 @@ function formatContextSection(symbolName: string, context: SymbolContext): strin
 }
 
 function formatDeadCodeSection(deadSymbols: DeadSymbol[]): string {
+  // Only include high and medium confidence in LLM prompts to reduce noise
+  const actionable = deadSymbols.filter((d) => d.confidence !== "low");
+  if (actionable.length === 0) return "";
+
   const lines: string[] = [];
-  lines.push("### Dead Code Warning");
-  for (const sym of deadSymbols.slice(0, 10)) {
-    lines.push(`- \`${sym.name}\` (${sym.type}) in ${sym.file} — appears unreachable`);
+  lines.push("### Dead Code Detected\n");
+
+  const high = actionable.filter((d) => d.confidence === "high");
+  const medium = actionable.filter((d) => d.confidence === "medium");
+
+  if (high.length > 0) {
+    lines.push("**Safe to remove** (no callers found):");
+    for (const sym of high.slice(0, 8)) {
+      const loc = sym.line ? `:${sym.line}` : "";
+      lines.push(`- \`${sym.name}\` (${sym.type}) in ${sym.file}${loc} — ${sym.reason}`);
+    }
+    if (high.length > 8) {
+      lines.push(`- ... and ${high.length - 8} more`);
+    }
   }
-  if (deadSymbols.length > 10) {
-    lines.push(`- ... and ${deadSymbols.length - 10} more`);
+
+  if (medium.length > 0) {
+    lines.push("\n**Needs investigation** (exported but unused internally):");
+    for (const sym of medium.slice(0, 5)) {
+      const loc = sym.line ? `:${sym.line}` : "";
+      lines.push(`- \`${sym.name}\` (${sym.type}) in ${sym.file}${loc} — ${sym.reason}`);
+    }
+    if (medium.length > 5) {
+      lines.push(`- ... and ${medium.length - 5} more`);
+    }
   }
+
   return lines.join("\n");
 }

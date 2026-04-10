@@ -32,6 +32,10 @@ export interface DeadSymbol {
   file: string;
   name: string;
   type: string;
+  confidence: "high" | "medium" | "low";
+  reason: string;
+  safeToDelete: boolean;
+  line?: number;
 }
 
 export interface IndexResult {

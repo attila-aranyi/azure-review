@@ -263,6 +263,94 @@ def get_context(
         return {"callers": [], "callees": [], "types": [], "community": None}
 
 
+# ── Pipeline cache ──
+# Avoids running the expensive pipeline twice when both graph-data and dead-code
+# are requested for the same repo.
+
+_pipeline_cache: dict[str, tuple[float, object]] = {}  # repo_path -> (timestamp, KnowledgeGraph)
+_CACHE_TTL = 300  # 5 minutes
+
+
+def _get_cached_kg(repo_path: str) -> object | None:
+    """Return a cached KnowledgeGraph, running the pipeline if needed."""
+    from pathlib import Path as _Path
+    from axon.core.ingestion.pipeline import run_pipeline
+
+    now = time.monotonic()
+    cached = _pipeline_cache.get(repo_path)
+    if cached and (now - cached[0]) < _CACHE_TTL:
+        return cached[1]
+
+    try:
+        kg, _result = run_pipeline(_Path(repo_path), storage=None, embeddings=False)
+        _pipeline_cache[repo_path] = (now, kg)
+        # Evict old entries (keep max 4)
+        if len(_pipeline_cache) > 4:
+            oldest = min(_pipeline_cache, key=lambda k: _pipeline_cache[k][0])
+            del _pipeline_cache[oldest]
+        logger.info("Pipeline cache: %d nodes, %d rels for %s", kg.node_count, kg.relationship_count, repo_path)
+        return kg
+    except Exception as e:
+        logger.error("Pipeline run failed: %s", e, exc_info=True)
+        return None
+
+
+# ── Dead code classification ──
+
+# Patterns that indicate framework entry points / test helpers
+_ENTRY_PATTERNS = {
+    "route", "handler", "middleware", "plugin", "hook",
+    "controller", "resolver", "subscriber", "listener",
+    "setup", "teardown", "beforeAll", "afterAll", "beforeEach", "afterEach",
+}
+
+_TEST_PATTERNS = {"test", "spec", "fixture", "mock", "stub", "fake", "helper"}
+
+
+def _classify_dead_symbol(
+    name: str,
+    file: str,
+    kind: str,
+    is_exported: bool,
+    is_entry_point: bool,
+    kg: object,
+    axon_id: str,
+) -> tuple[str, str, bool]:
+    """Classify a dead symbol into confidence/reason/safeToDelete.
+
+    Returns:
+        (confidence, reason, safe_to_delete)
+    """
+    file_lower = file.lower()
+    name_lower = name.lower()
+
+    # Entry points are likely not dead — framework may call them
+    if is_entry_point:
+        return ("low", "Marked as entry point — likely called by framework", False)
+
+    # Test files: symbols here are invoked by test runners
+    if any(p in file_lower for p in ("/test/", "/tests/", "/__tests__/", ".test.", ".spec.")):
+        return ("low", "Located in test file — invoked by test runner", False)
+
+    # Test helper patterns in the name
+    if any(p in name_lower for p in _TEST_PATTERNS):
+        return ("low", "Name suggests test helper — may be used by test infrastructure", False)
+
+    # Exported symbols may be consumed externally
+    if is_exported:
+        # Exported from an index/barrel file — likely a public API
+        if file_lower.endswith("index.ts") or file_lower.endswith("index.js"):
+            return ("low", "Exported from barrel file — may be part of public API", False)
+        return ("medium", "Exported but unreferenced within this repository", False)
+
+    # Framework handler patterns
+    if any(p in name_lower for p in _ENTRY_PATTERNS):
+        return ("low", "Name suggests framework handler — may be called by runtime", False)
+
+    # Truly internal and unreferenced — high confidence
+    return ("high", "No callers found in codebase — internal and unreachable", True)
+
+
 def get_dead_code(
     tenant_id: str,
     repo_id: str,
@@ -270,32 +358,74 @@ def get_dead_code(
 ) -> dict:
     """Detect dead/unreachable code in the repository.
 
-    Returns:
-        dict with dead_symbols list
-    """
-    graph_path = _graph_path(tenant_id, repo_id)
+    Runs the pipeline in-process, reads node.is_dead, and classifies
+    each dead symbol with confidence and reason.
 
-    try:
-        output = _run_axon(
-            ["dead-code", "--output-format", "json"],
-            cwd=repo_path,
-            env_extra={"AXON_GRAPH_DIR": graph_path},
-        )
-        data = json.loads(output)
-        return {"dead_symbols": data.get("dead_symbols", data.get("dead_code", []))}
-    except (AxonError, json.JSONDecodeError) as e:
-        logger.warning("dead-code query failed: %s", e)
+    Returns:
+        dict with dead_symbols list (enriched with confidence/reason/safeToDelete)
+    """
+    kg = _get_cached_kg(repo_path)
+    if kg is None:
         return {"dead_symbols": []}
+
+    dead_symbols = []
+    from axon.core.graph.graph import NodeLabel
+    symbol_labels = {NodeLabel.FUNCTION, NodeLabel.CLASS, NodeLabel.METHOD,
+                     NodeLabel.INTERFACE, NodeLabel.TYPE_ALIAS, NodeLabel.ENUM}
+
+    for node in kg.iter_nodes():
+        if not getattr(node, "is_dead", False):
+            continue
+        axon_id = getattr(node, "id", None) or str(node)
+        kind = "unknown"
+        for sl in symbol_labels:
+            if axon_id.startswith(sl.value + ":"):
+                kind = sl.value
+                break
+        if kind == "unknown":
+            continue
+
+        name = getattr(node, "class_name", None) or axon_id.rsplit(":", 1)[-1] or axon_id
+        file = getattr(node, "file_path", "") or ""
+        line = getattr(node, "start_line", None)
+        is_exported = getattr(node, "is_exported", False)
+        is_entry = getattr(node, "is_entry_point", False)
+
+        confidence, reason, safe = _classify_dead_symbol(
+            name=name, file=file, kind=kind,
+            is_exported=is_exported, is_entry_point=is_entry,
+            kg=kg, axon_id=axon_id,
+        )
+
+        dead_symbols.append({
+            "file": file,
+            "name": name,
+            "type": kind,
+            "confidence": confidence,
+            "reason": reason,
+            "safeToDelete": safe,
+            "line": line,
+        })
+
+    # Sort: high confidence first, then medium, then low
+    order = {"high": 0, "medium": 1, "low": 2}
+    dead_symbols.sort(key=lambda s: (order.get(s["confidence"], 3), s["file"], s["name"]))
+
+    logger.info("Dead code: %d total (%d high, %d medium, %d low)",
+                len(dead_symbols),
+                sum(1 for s in dead_symbols if s["confidence"] == "high"),
+                sum(1 for s in dead_symbols if s["confidence"] == "medium"),
+                sum(1 for s in dead_symbols if s["confidence"] == "low"))
+
+    return {"dead_symbols": dead_symbols}
 
 
 def get_graph_data(tenant_id: str, repo_id: str, repo_path: str) -> dict:
     """Return the full graph for visualization: nodes, edges, clusters.
 
-    Runs axon's pipeline in-process to get the in-memory KnowledgeGraph
-    with both nodes AND edges (kuzu only persists nodes).
+    Uses the cached pipeline result to get the in-memory KnowledgeGraph
+    with both nodes AND edges, plus dead code annotations.
     """
-    from pathlib import Path as _Path
-    from axon.core.ingestion.pipeline import run_pipeline
     from axon.core.graph.graph import NodeLabel
 
     nodes = []
@@ -303,9 +433,11 @@ def get_graph_data(tenant_id: str, repo_id: str, repo_path: str) -> dict:
     clusters: dict[int, int] = {}
 
     try:
-        kg, result = run_pipeline(_Path(repo_path), storage=None, embeddings=False)
+        kg = _get_cached_kg(repo_path)
+        if kg is None:
+            return {"nodes": [], "edges": [], "clusters": []}
 
-        logger.info("Pipeline result: %d nodes, %d rels",
+        logger.info("Graph data pipeline: %d nodes, %d rels",
                      kg.node_count, kg.relationship_count)
 
         # Build node ID lookup: axon_id -> viz_id
@@ -331,7 +463,21 @@ def get_graph_data(tenant_id: str, repo_id: str, repo_path: str) -> dict:
             uid = f"{file}::{name}" if file else name
             id_map[axon_id] = uid
             node_ids.add(uid)
-            nodes.append({"id": uid, "label": name, "type": kind, "file": file, "cluster": 0})
+            node_data: dict = {"id": uid, "label": name, "type": kind, "file": file, "cluster": 0}
+            # Embed dead code info
+            if getattr(node, "is_dead", False):
+                is_exported = getattr(node, "is_exported", False)
+                is_entry = getattr(node, "is_entry_point", False)
+                conf, reason, safe = _classify_dead_symbol(
+                    name=name, file=file, kind=kind,
+                    is_exported=is_exported, is_entry_point=is_entry,
+                    kg=kg, axon_id=axon_id,
+                )
+                node_data["isDead"] = True
+                node_data["deadConfidence"] = conf
+                node_data["deadReason"] = reason
+                node_data["safeToDelete"] = safe
+            nodes.append(node_data)
 
         # Collect edges from in-memory graph (only between symbol nodes)
         for rel in kg.iter_relationships():

@@ -28,4 +28,4 @@ function executeQuery(sql: string) {
   console.log("Executing:", sql);
   return { ok: true };
 }
-// axon test 28 — fix iter_nodes unpacking
+// dead code detection: confidence classification + graph-embedded data + summary panel
