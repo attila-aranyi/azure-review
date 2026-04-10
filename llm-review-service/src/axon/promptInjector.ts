@@ -78,9 +78,8 @@ export function formatReviewSummary(structuralContext: StructuralContext): strin
   if (structuralContext.deadCode.length > 0) {
     const high = structuralContext.deadCode.filter((d) => d.confidence === "high").length;
     const medium = structuralContext.deadCode.filter((d) => d.confidence === "medium").length;
-    const low = structuralContext.deadCode.filter((d) => d.confidence === "low").length;
-    const parts = [high && `${high} high`, medium && `${medium} medium`, low && `${low} low`].filter(Boolean);
-    lines.push(`- **${structuralContext.deadCode.length}** dead code symbols detected (${parts.join(", ")})`);
+    const parts = [high && `${high} high confidence`, medium && `${medium} medium`].filter(Boolean);
+    lines.push(`- **${structuralContext.deadCode.length}** dead code symbols in changed files${parts.length ? ` (${parts.join(", ")})` : ""}`);
   }
 
   return lines.join("\n");

@@ -112,16 +112,29 @@ export async function enrichReview(
     }),
   );
 
-  // Step 5: Detect dead code
+  // Step 5: Detect dead code — filtered to files changed in this PR
   const deadCodeResult = await client.getDeadCode(tenantId, repoId);
-  const deadCode = deadCodeResult?.dead_symbols ?? [];
+  const allDeadCode = deadCodeResult?.dead_symbols ?? [];
+
+  // Build set of changed file paths for filtering
+  const changedFiles = new Set(changedSymbols.map((s) => s.file));
+  // Also extract file paths from the diff text (covers files without detected symbols)
+  for (const line of diff.split("\n")) {
+    const match = line.match(/^(?:diff --git a\/|[+]{3} b\/)(.+)/);
+    if (match) changedFiles.add(match[1]);
+  }
+
+  const deadCode = allDeadCode.filter(
+    (d) => changedFiles.has(d.file) || [...changedFiles].some((f) => d.file.endsWith(`/${f}`) || f.endsWith(`/${d.file}`)),
+  );
 
   logger.info(
     {
       changedSymbols: changedSymbols.length,
       impactQueried: impactBySymbol.size,
       contextQueried: contextBySymbol.size,
-      deadCodeFound: deadCode.length,
+      deadCodeInRepo: allDeadCode.length,
+      deadCodeInPR: deadCode.length,
     },
     "Axon enrichment complete",
   );

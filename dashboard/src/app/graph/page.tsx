@@ -361,8 +361,8 @@ function GraphContent() {
                   </div>
                 </div>
                 <div className="divide-y divide-zinc-800">
-                  {[...deadHigh, ...deadMedium, ...deadLow].slice(0, 50).map((n) => (
-                    <div key={n.id} className="px-4 py-2.5 hover:bg-zinc-800/50 cursor-pointer" onClick={() => {
+                  {[...deadHigh, ...deadMedium, ...deadLow].slice(0, 50).map((n, i) => (
+                    <div key={`${n.id}-${i}`} className="px-4 py-2.5 hover:bg-zinc-800/50 cursor-pointer" onClick={() => {
                       const cy = cyRef.current;
                       if (cy) {
                         const node = cy.getElementById(n.id);

@@ -296,15 +296,24 @@ def _get_cached_kg(repo_path: str) -> object | None:
 
 
 # ── Dead code classification ──
+#
+# Conservative by default: only private, unexported, single-file functions
+# with zero in-degree get "high". Anything the static analysis can't fully
+# prove is dead stays at "medium" or "low". False "safe to delete" on a
+# framework-invoked symbol destroys trust, so we err on the cautious side.
 
-# Patterns that indicate framework entry points / test helpers
-_ENTRY_PATTERNS = {
+_FRAMEWORK_PATTERNS = {
     "route", "handler", "middleware", "plugin", "hook",
     "controller", "resolver", "subscriber", "listener",
-    "setup", "teardown", "beforeAll", "afterAll", "beforeEach", "afterEach",
+    "provider", "factory", "strategy", "adapter", "guard",
+    "interceptor", "pipe", "filter", "decorator", "module",
+    "register", "configure", "bootstrap", "init", "main",
 }
 
 _TEST_PATTERNS = {"test", "spec", "fixture", "mock", "stub", "fake", "helper"}
+
+# Class/interface kinds — static analysis often can't trace instantiation
+_CLASS_KINDS = {"class", "interface", "type_alias", "enum"}
 
 
 def _classify_dead_symbol(
@@ -318,37 +327,56 @@ def _classify_dead_symbol(
 ) -> tuple[str, str, bool]:
     """Classify a dead symbol into confidence/reason/safeToDelete.
 
+    Conservative approach: default to medium, only promote to high when
+    we can prove the symbol is truly unreachable.
+
     Returns:
         (confidence, reason, safe_to_delete)
     """
     file_lower = file.lower()
     name_lower = name.lower()
 
-    # Entry points are likely not dead — framework may call them
+    # ── Definitely low confidence (framework/test/entry points) ──
+
     if is_entry_point:
         return ("low", "Marked as entry point — likely called by framework", False)
 
-    # Test files: symbols here are invoked by test runners
     if any(p in file_lower for p in ("/test/", "/tests/", "/__tests__/", ".test.", ".spec.")):
-        return ("low", "Located in test file — invoked by test runner", False)
+        return ("low", "In test file — invoked by test runner", False)
 
-    # Test helper patterns in the name
     if any(p in name_lower for p in _TEST_PATTERNS):
-        return ("low", "Name suggests test helper — may be used by test infrastructure", False)
+        return ("low", "Name suggests test utility — may be used by test infrastructure", False)
 
-    # Exported symbols may be consumed externally
+    if any(p in name_lower for p in _FRAMEWORK_PATTERNS):
+        return ("low", "Name suggests framework hook — may be called by runtime", False)
+
+    # Exported from barrel/index file — almost certainly a public API
+    if is_exported and (file_lower.endswith("index.ts") or file_lower.endswith("index.js")):
+        return ("low", "Exported from barrel file — part of public API surface", False)
+
+    # Classes/interfaces: static analysis can't reliably trace instantiation,
+    # DI containers, or type-only references that drive runtime behavior
+    if kind in _CLASS_KINDS:
+        return ("low", f"Static analysis cannot fully trace {kind} usage (DI, type guards, etc.)", False)
+
+    # Any exported symbol: external consumers may exist
     if is_exported:
-        # Exported from an index/barrel file — likely a public API
-        if file_lower.endswith("index.ts") or file_lower.endswith("index.js"):
-            return ("low", "Exported from barrel file — may be part of public API", False)
-        return ("medium", "Exported but unreferenced within this repository", False)
+        return ("medium", "Exported but no internal callers — may be consumed externally", False)
 
-    # Framework handler patterns
-    if any(p in name_lower for p in _ENTRY_PATTERNS):
-        return ("low", "Name suggests framework handler — may be called by runtime", False)
+    # ── Medium: unexported but could be invoked dynamically ──
 
-    # Truly internal and unreferenced — high confidence
-    return ("high", "No callers found in codebase — internal and unreachable", True)
+    # Methods are often called via polymorphism / interface dispatch
+    if kind == "method":
+        return ("medium", "Unexported method — may be invoked via interface dispatch", False)
+
+    # ── High: private, unexported function with zero callers ──
+    # Only plain functions that are not exported, not in test files,
+    # not matching framework patterns, and not classes/methods qualify.
+    if kind == "function":
+        return ("high", "Private function with no callers — safe to remove", True)
+
+    # Default: medium — we can't prove it's dead
+    return ("medium", "No callers found but static analysis may be incomplete", False)
 
 
 def get_dead_code(
