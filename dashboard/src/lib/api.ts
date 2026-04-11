@@ -87,6 +87,9 @@ export const api = {
   getDailyUsage: (year: number, month: number) =>
     apiFetch<{ days: DailyUsage[] }>(`/api/usage/daily?year=${year}&month=${month}`),
 
+  getIssueTypes: () =>
+    apiFetch<{ issueTypes: { name: string; value: number }[] }>("/api/usage/issue-types"),
+
   // ── Config ──
   getConfig: () => apiFetch<TenantConfig>("/api/config"),
   updateConfig: (data: Partial<TenantConfig>) => apiFetch<TenantConfig>("/api/config", { method: "PUT", body: JSON.stringify(data) }),
