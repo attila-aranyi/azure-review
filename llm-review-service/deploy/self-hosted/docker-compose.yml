@@ -67,6 +67,10 @@ services:
     environment:
       DATA_DIR: /data
       LOG_LEVEL: ${AXON_LOG_LEVEL:-INFO}
+      # Optional: mount a local embedding model to enable vector search
+      # without outbound network access. Download the model once, then
+      # mount it here: AXON_EMBEDDING_MODEL_DIR=/data/models
+      AXON_EMBEDDING_MODEL_DIR: ${AXON_EMBEDDING_MODEL_DIR:-}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8100/health"]

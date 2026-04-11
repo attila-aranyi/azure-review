@@ -21,6 +21,13 @@ GRAPHS_DIR = os.path.join(DATA_DIR, "graphs")
 ANALYZE_TIMEOUT = 300  # 5 minutes for large repos
 QUERY_TIMEOUT = 60  # 1 minute for queries
 
+# Embedding configuration:
+# Set AXON_EMBEDDING_MODEL_DIR to a local directory containing a pre-downloaded
+# fastembed model (e.g. BAAI/bge-small-en-v1.5) to enable vector embeddings
+# WITHOUT any outbound network access. When unset, embeddings are disabled.
+EMBEDDING_MODEL_DIR = os.environ.get("AXON_EMBEDDING_MODEL_DIR", "")
+EMBEDDINGS_ENABLED = bool(EMBEDDING_MODEL_DIR)
+
 
 class AxonError(Exception):
     """Raised when an axon operation fails."""
@@ -287,8 +294,18 @@ def _get_cached_kg(repo_path: str) -> object | None:
     if cached and (now - cached[0]) < _CACHE_TTL:
         return cached[1]
 
+    # If a local embedding model directory is provided, configure fastembed
+    # to use it (no network download). Otherwise disable embeddings entirely.
+    if EMBEDDINGS_ENABLED:
+        try:
+            import fastembed
+            fastembed.TextEmbedding._default_cache_dir = EMBEDDING_MODEL_DIR  # type: ignore[attr-defined]
+            os.environ["FASTEMBED_CACHE_PATH"] = EMBEDDING_MODEL_DIR
+        except Exception:
+            pass
+
     try:
-        kg, _result = run_pipeline(_Path(repo_path), storage=None, embeddings=False)
+        kg, _result = run_pipeline(_Path(repo_path), storage=None, embeddings=EMBEDDINGS_ENABLED)
         _pipeline_cache[repo_path] = (now, kg)
         # Evict old entries (keep max 4)
         if len(_pipeline_cache) > 4:

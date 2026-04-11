@@ -74,6 +74,15 @@ class StatusResponse(BaseModel):
 # ---------- Health ----------
 
 
+@app.on_event("startup")
+async def startup():
+    from graph_manager import EMBEDDINGS_ENABLED, EMBEDDING_MODEL_DIR
+    if EMBEDDINGS_ENABLED:
+        logger.info("Embeddings ENABLED (local model: %s)", EMBEDDING_MODEL_DIR)
+    else:
+        logger.info("Embeddings DISABLED (set AXON_EMBEDDING_MODEL_DIR to enable)")
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "axon-sidecar"}

@@ -17,6 +17,11 @@ RUN mkdir -p /data/clones /data/graphs
 
 ENV DATA_DIR=/data
 ENV PORT=8100
+# Optional: set to a local path containing a pre-downloaded fastembed model
+# to enable vector embeddings without outbound network access.
+# Example: AXON_EMBEDDING_MODEL_DIR=/data/models
+# When unset, embeddings are disabled and no external downloads occur.
+# ENV AXON_EMBEDDING_MODEL_DIR=
 
 EXPOSE 8100
 
