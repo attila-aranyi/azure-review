@@ -36,25 +36,29 @@ export const registerUsageRoutes: FastifyPluginAsync<{
     // Fallback: if usage_daily is empty, compute from reviews + findings tables
     let usage = monthly;
     if (usage.reviewCount === 0) {
-      const from = new Date(Date.UTC(year, month - 1, 1));
-      const to = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
-      const fromStr = from.toISOString();
-      const toStr = to.toISOString();
-      const reviewRows = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(reviews)
-        .where(and(eq(reviews.tenantId, tenantId), sql`${reviews.createdAt} >= ${fromStr}::timestamptz`, sql`${reviews.createdAt} <= ${toStr}::timestamptz`));
-      const findingRows = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(reviewFindings)
-        .innerJoin(reviews, eq(reviewFindings.reviewId, reviews.id))
-        .where(and(eq(reviews.tenantId, tenantId), eq(reviewFindings.status, "posted"), sql`${reviews.createdAt} >= ${fromStr}::timestamptz`, sql`${reviews.createdAt} <= ${toStr}::timestamptz`));
-      usage = {
-        reviewCount: reviewRows[0]?.count ?? 0,
-        findingsCount: findingRows[0]?.count ?? 0,
-        tokensUsed: 0,
-        llmCostCents: 0,
-      };
+      try {
+        const from = new Date(Date.UTC(year, month - 1, 1));
+        const to = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+        const fromStr = from.toISOString();
+        const toStr = to.toISOString();
+        const reviewRows = await db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(reviews)
+          .where(and(eq(reviews.tenantId, tenantId), sql`${reviews.createdAt} >= ${fromStr}::timestamptz`, sql`${reviews.createdAt} <= ${toStr}::timestamptz`));
+        const findingRows = await db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(reviewFindings)
+          .innerJoin(reviews, eq(reviewFindings.reviewId, reviews.id))
+          .where(and(eq(reviews.tenantId, tenantId), eq(reviewFindings.status, "posted"), sql`${reviews.createdAt} >= ${fromStr}::timestamptz`, sql`${reviews.createdAt} <= ${toStr}::timestamptz`));
+        usage = {
+          reviewCount: reviewRows[0]?.count ?? 0,
+          findingsCount: findingRows[0]?.count ?? 0,
+          tokensUsed: 0,
+          llmCostCents: 0,
+        };
+      } catch {
+        // Fallback query failed — keep the original (zero) usage
+      }
     }
 
     const limits = tenant ? await usageRepo.getPlanLimits(tenant.plan) : null;
@@ -99,6 +103,7 @@ export const registerUsageRoutes: FastifyPluginAsync<{
 
     // Fallback: compute daily stats from reviews table if usage_daily is empty
     if (days.length === 0) {
+      try {
       const fromStr = from.toISOString();
       const toStr = to.toISOString();
       const reviewDaily = await db
@@ -118,6 +123,9 @@ export const registerUsageRoutes: FastifyPluginAsync<{
         tokensUsed: 0,
         llmCostCents: 0,
       }));
+      } catch {
+        // Fallback query failed — keep empty days
+      }
     }
 
     return {
