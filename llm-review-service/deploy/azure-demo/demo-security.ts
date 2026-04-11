@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // Demo file with intentional security issues for AI code review testing
 
 export function authenticateUser(username: string, password: string) {
