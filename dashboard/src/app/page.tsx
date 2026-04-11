@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { AppShell } from "@/components/layout/app-shell";
 import { api, type UsageSummary, type DailyUsage, type Review, type GraphData } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { AreaChart, ProgressBar } from "@tremor/react";
+import { BarChart } from "@tremor/react";
 import { Activity, Bug, Eye, HeartPulse, ArrowUpRight, ArrowDownRight } from "lucide-react";
 import Link from "next/link";
 
@@ -157,15 +157,14 @@ function DashboardContent() {
         <div className="lg:col-span-3 glass-card rounded-xl p-5">
           <p className="text-[11px] font-medium uppercase tracking-wider text-slate-500 mb-4">Activity Trend</p>
           {daily.length > 0 ? (
-            <AreaChart
+            <BarChart
               className="h-44"
-              data={daily.map((d) => ({ date: d.date.slice(5, 10), Findings: d.findingsCount, Reviews: d.reviewCount }))}
+              data={daily.map((d) => ({ date: d.date.slice(5, 10), Reviews: d.reviewCount, Findings: d.findingsCount }))}
               index="date"
               categories={["Reviews", "Findings"]}
               colors={["emerald", "blue"]}
               showLegend
               showGridLines={false}
-              curveType="monotone"
               showAnimation
             />
           ) : (
