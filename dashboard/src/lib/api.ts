@@ -85,7 +85,7 @@ export const api = {
   },
 
   getDailyUsage: (year: number, month: number) =>
-    apiFetch<{ days: DailyUsage[] }>(`/api/usage/daily?year=${year}&month=${month}`),
+    apiFetch<{ daily: DailyUsage[] }>(`/api/usage/daily?year=${year}&month=${month}`),
 
   getIssueTypes: () =>
     apiFetch<{ issueTypes: { name: string; value: number }[] }>("/api/usage/issue-types"),

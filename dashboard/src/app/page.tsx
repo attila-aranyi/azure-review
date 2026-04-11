@@ -37,12 +37,12 @@ function DashboardContent() {
     const now = new Date();
     Promise.all([
       api.getUsage(now.getFullYear(), now.getMonth() + 1).catch(() => null),
-      api.getDailyUsage(now.getFullYear(), now.getMonth() + 1).catch(() => ({ days: [] })),
+      api.getDailyUsage(now.getFullYear(), now.getMonth() + 1).catch(() => ({ daily: [] })),
       api.listReviews({ limit: 5 }).catch(() => ({ data: [] })),
       api.getIssueTypes().catch(() => ({ issueTypes: [] })),
     ]).then(([u, d, r, it]) => {
       setUsage(u);
-      setDaily(d?.days ?? []);
+      setDaily(d?.daily ?? []);
       const revs = r?.data ?? [];
       setReviews(revs);
       setIssueTypes(it?.issueTypes ?? []);
@@ -159,15 +159,32 @@ function DashboardContent() {
         </Card>
 
         <Card className="bg-zinc-900 border-zinc-800 ring-0">
-          <Text className="text-zinc-400 mb-4">Issue Types</Text>
+          <Text className="text-zinc-400 mb-4">Issue Types (Last 30 Days)</Text>
           {issueTypeData.length > 0 ? (
-            <DonutChart
-              className="h-48"
-              data={issueTypeData}
-              category="value"
-              index="name"
-              colors={["red", "amber", "blue", "emerald"]}
-            />
+            <div className="flex items-center gap-6">
+              <DonutChart
+                className="h-48 w-48 flex-shrink-0"
+                data={issueTypeData}
+                category="value"
+                index="name"
+                variant="donut"
+                colors={["blue", "cyan", "amber", "red", "rose", "emerald", "violet"]}
+                showLabel
+                showAnimation
+              />
+              <div className="flex flex-col gap-1.5 text-xs">
+                {issueTypeData.map((item, i) => {
+                  const colors = ["#3b82f6", "#06b6d4", "#f59e0b", "#ef4444", "#f43f5e", "#10b981", "#8b5cf6"];
+                  return (
+                    <span key={item.name} className="flex items-center gap-2 text-zinc-300">
+                      <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: colors[i % colors.length] }} />
+                      <span className="capitalize">{item.name}</span>
+                      <span className="text-zinc-500 ml-auto">{item.value}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
           ) : (
             <p className="text-zinc-500 text-sm">No data yet</p>
           )}
