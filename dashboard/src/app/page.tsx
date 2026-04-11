@@ -29,6 +29,7 @@ function DashboardContent() {
   const [daily, setDaily] = useState<DailyUsage[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [health, setHealth] = useState<{ total: number; dead: number; high: number; medium: number; low: number; repoId: string } | null>(null);
+  const [issueTypes, setIssueTypes] = useState<{ name: string; value: number }[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -38,11 +39,13 @@ function DashboardContent() {
       api.getUsage(now.getFullYear(), now.getMonth() + 1).catch(() => null),
       api.getDailyUsage(now.getFullYear(), now.getMonth() + 1).catch(() => ({ days: [] })),
       api.listReviews({ limit: 5 }).catch(() => ({ data: [] })),
-    ]).then(([u, d, r]) => {
+      api.getIssueTypes().catch(() => ({ issueTypes: [] })),
+    ]).then(([u, d, r, it]) => {
       setUsage(u);
       setDaily(d?.days ?? []);
       const revs = r?.data ?? [];
       setReviews(revs);
+      setIssueTypes(it?.issueTypes ?? []);
       setLoading(false);
 
       // Fetch code health from the first repo that has reviews
@@ -67,14 +70,7 @@ function DashboardContent() {
     return <div className="text-zinc-400">Loading dashboard...</div>;
   }
 
-  const issueTypeData = reviews.length > 0
-    ? [
-        { name: "Bug", value: 4 },
-        { name: "Security", value: 2 },
-        { name: "Style", value: 3 },
-        { name: "Performance", value: 1 },
-      ]
-    : [];
+  const issueTypeData = issueTypes;
 
   return (
     <div className="space-y-8">

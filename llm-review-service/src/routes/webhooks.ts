@@ -239,6 +239,7 @@ export const registerWebhookRoutes: FastifyPluginAsync<{
                     setTimeout(() => reject(new Error("review timeout")), timeoutMs)
                   )
                 ]);
+
               } catch (err) {
                 app.log.error({ err, repoId, prId, tenantId }, "Review pipeline failed");
               }

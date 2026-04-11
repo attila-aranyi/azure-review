@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import type { DrizzleInstance } from "../db/connection";
-import { reviews, reviewFindings } from "../db/schema";
+import { reviews, reviewFindings, usageDaily } from "../db/schema";
+import { createUsageRepo } from "../db/repos/usageRepo";
 
 export type AuditFinding = {
   issueType: string;
@@ -131,6 +132,18 @@ export function createDbAuditStore(
           );
         }
       });
+
+      // Record usage for KPI dashboard
+      const postedFindings = record.findings.filter((f) => f.status === "posted").length;
+      try {
+        const usageRepo = createUsageRepo(db);
+        await usageRepo.recordUsage(tenantId, {
+          reviewCount: 1,
+          findingsCount: postedFindings,
+        });
+      } catch {
+        // Non-critical — don't fail the audit if usage recording fails
+      }
     },
 
     async query(filter) {
