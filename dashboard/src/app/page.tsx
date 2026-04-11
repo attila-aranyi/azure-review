@@ -4,22 +4,33 @@ import { useEffect, useState } from "react";
 import { AppShell } from "@/components/layout/app-shell";
 import { api, type UsageSummary, type DailyUsage, type Review, type GraphData } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { AreaChart, DonutChart, Card, Metric, Text, Flex, ProgressBar, BadgeDelta } from "@tremor/react";
-import { Activity, Bug, Shield, Eye, HeartPulse } from "lucide-react";
+import { AreaChart, ProgressBar } from "@tremor/react";
+import { Activity, Bug, Eye, HeartPulse, ArrowUpRight, ArrowDownRight } from "lucide-react";
 import Link from "next/link";
 
-function KpiCard({ title, value, icon: Icon, delta }: { title: string; value: string; icon: React.ElementType; delta?: string }) {
+const ACCENT_COLORS: Record<string, string> = {
+  reviews: "#22C55E",
+  findings: "#3B82F6",
+  tokens: "#8B5CF6",
+  cost: "#F59E0B",
+};
+
+const ISSUE_COLORS = ["#3b82f6", "#06b6d4", "#f59e0b", "#ef4444", "#f43f5e", "#10b981", "#8b5cf6"];
+
+function KpiCard({ title, value, accent, icon: Icon }: { title: string; value: string; accent: string; icon: React.ElementType }) {
   return (
-    <Card className="bg-zinc-900 border-zinc-800 ring-0">
-      <Flex alignItems="start">
+    <div className="glass-card rounded-xl p-5 relative overflow-hidden group cursor-default">
+      <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-r" style={{ backgroundColor: accent }} />
+      <div className="flex items-start justify-between">
         <div>
-          <Text className="text-zinc-400">{title}</Text>
-          <Metric className="text-white mt-1">{value}</Metric>
-          {delta && <BadgeDelta deltaType="moderateIncrease" className="mt-2">{delta}</BadgeDelta>}
+          <p className="text-[11px] font-medium uppercase tracking-wider text-slate-500">{title}</p>
+          <p className="text-2xl font-semibold text-white mt-1.5 tracking-tight">{value}</p>
         </div>
-        <Icon className="h-8 w-8 text-zinc-600" />
-      </Flex>
-    </Card>
+        <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ backgroundColor: accent + "10" }}>
+          <Icon className="h-4 w-4" style={{ color: accent }} />
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -48,7 +59,6 @@ function DashboardContent() {
       setIssueTypes(it?.issueTypes ?? []);
       setLoading(false);
 
-      // Fetch code health from the first repo that has reviews
       if (revs.length > 0) {
         const repoId = revs[0].repoId;
         api.getGraph(repoId).then((g: GraphData) => {
@@ -67,165 +77,176 @@ function DashboardContent() {
   }, [authenticated]);
 
   if (loading) {
-    return <div className="text-zinc-400">Loading dashboard...</div>;
+    return (
+      <div className="space-y-6">
+        <div className="h-8 w-48 bg-white/[0.03] rounded-lg animate-pulse" />
+        <div className="grid grid-cols-4 gap-4">
+          {[1,2,3,4].map(i => <div key={i} className="h-24 bg-white/[0.03] rounded-xl animate-pulse" />)}
+        </div>
+      </div>
+    );
   }
 
-  const issueTypeData = issueTypes;
+  const issueTotal = issueTypes.reduce((s, i) => s + i.value, 0);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
+      {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-white">Dashboard</h1>
-        <p className="text-sm text-zinc-400 mt-1">Overview of your code review activity</p>
+        <h1 className="text-xl font-semibold text-white tracking-tight">Dashboard</h1>
+        <p className="text-sm text-slate-500 mt-0.5">Overview of your code review activity</p>
       </div>
 
+      {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard title="Reviews This Month" value={String(usage?.usage.reviewCount ?? 0)} icon={Activity} />
-        <KpiCard title="Findings" value={String(usage?.usage.findingsCount ?? 0)} icon={Bug} />
-        <KpiCard title="Tokens Used" value={usage ? `${Math.round((usage.usage.tokensUsed ?? 0) / 1000)}k` : "0"} icon={Eye} />
-        <KpiCard title="LLM Cost" value={usage ? `$${((usage.usage.llmCostCents ?? 0) / 100).toFixed(2)}` : "$0.00"} icon={Shield} />
+        <KpiCard title="Reviews This Month" value={String(usage?.usage.reviewCount ?? 0)} accent={ACCENT_COLORS.reviews} icon={Activity} />
+        <KpiCard title="Findings" value={String(usage?.usage.findingsCount ?? 0)} accent={ACCENT_COLORS.findings} icon={Bug} />
+        <KpiCard title="Tokens Used" value={usage ? `${Math.round((usage.usage.tokensUsed ?? 0) / 1000)}k` : "0"} accent={ACCENT_COLORS.tokens} icon={Eye} />
+        <KpiCard title="LLM Cost" value={usage ? `$${((usage.usage.llmCostCents ?? 0) / 100).toFixed(2)}` : "$0.00"} accent={ACCENT_COLORS.cost} icon={ArrowUpRight} />
       </div>
 
+      {/* Code Health */}
       {health && health.dead > 0 && (
-        <Link href="/graph">
-          <Card className="bg-zinc-900 border-zinc-800 ring-0 hover:border-zinc-600 transition-colors cursor-pointer">
-            <Flex alignItems="start">
-              <div>
-                <Text className="text-zinc-400">Code Health</Text>
-                <div className="flex items-baseline gap-3 mt-1">
-                  <Metric className="text-white">{health.total - health.dead} <span className="text-base font-normal text-zinc-500">/ {health.total} symbols alive</span></Metric>
+        <Link href="/graph" className="block">
+          <div className="glass-card rounded-xl p-5 cursor-pointer group">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <p className="text-[11px] font-medium uppercase tracking-wider text-slate-500">Code Health</p>
+                <div className="flex items-baseline gap-2 mt-1.5">
+                  <span className="text-2xl font-semibold text-white tracking-tight">{health.total - health.dead}</span>
+                  <span className="text-sm text-slate-500">/ {health.total} symbols alive</span>
                 </div>
-                <div className="flex gap-4 mt-3 text-xs">
+                <div className="flex gap-5 mt-3">
                   {health.high > 0 && (
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-red-500" />
-                      <span className="text-red-400">{health.high} safe to remove</span>
+                    <span className="flex items-center gap-1.5 text-xs">
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+                      <span className="text-red-400/80">{health.high} safe to remove</span>
                     </span>
                   )}
                   {health.medium > 0 && (
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-orange-500" />
-                      <span className="text-orange-400">{health.medium} needs investigation</span>
+                    <span className="flex items-center gap-1.5 text-xs">
+                      <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
+                      <span className="text-orange-400/80">{health.medium} investigate</span>
                     </span>
                   )}
                   {health.low > 0 && (
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-yellow-500" />
-                      <span className="text-yellow-400">{health.low} likely false positive</span>
+                    <span className="flex items-center gap-1.5 text-xs">
+                      <span className="w-1.5 h-1.5 rounded-full bg-yellow-500" />
+                      <span className="text-yellow-400/80">{health.low} likely OK</span>
                     </span>
                   )}
                 </div>
-                <ProgressBar
-                  value={health.total > 0 ? ((health.total - health.dead) / health.total) * 100 : 100}
-                  color="emerald"
-                  className="mt-3"
-                />
+                <div className="mt-3 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-500"
+                    style={{ width: `${health.total > 0 ? ((health.total - health.dead) / health.total) * 100 : 100}%` }}
+                  />
+                </div>
               </div>
-              <HeartPulse className="h-8 w-8 text-zinc-600" />
-            </Flex>
-          </Card>
+              <div className="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center ml-4">
+                <HeartPulse className="h-4 w-4 text-emerald-400" />
+              </div>
+            </div>
+          </div>
         </Link>
       )}
 
-      {usage?.limits && (
-        <Card className="bg-zinc-900 border-zinc-800 ring-0">
-          <Text className="text-zinc-400">Plan Usage ({usage.plan})</Text>
-          <Flex className="mt-4">
-            <Text className="text-zinc-300">Reviews: {usage.usage.reviewCount} / {usage.limits.maxReviewsPerMonth}</Text>
-          </Flex>
-          <ProgressBar
-            value={usage.limits.maxReviewsPerMonth > 0 ? (usage.usage.reviewCount / usage.limits.maxReviewsPerMonth) * 100 : 0}
-            className="mt-2"
-          />
-        </Card>
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <Card className="bg-zinc-900 border-zinc-800 ring-0">
-          <Text className="text-zinc-400 mb-4">Findings Trend (This Month)</Text>
+      {/* Charts Row */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+        {/* Findings Trend — 3 cols */}
+        <div className="lg:col-span-3 glass-card rounded-xl p-5">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-slate-500 mb-4">Activity Trend</p>
           {daily.length > 0 ? (
             <AreaChart
-              className="h-48"
+              className="h-44"
               data={daily.map((d) => ({ date: d.date.slice(5, 10), Findings: d.findingsCount, Reviews: d.reviewCount }))}
               index="date"
-              categories={["Findings", "Reviews"]}
-              colors={["blue", "emerald"]}
+              categories={["Reviews", "Findings"]}
+              colors={["emerald", "blue"]}
               showLegend
               showGridLines={false}
+              curveType="monotone"
+              showAnimation
             />
           ) : (
-            <p className="text-zinc-500 text-sm">No data yet</p>
+            <div className="h-44 flex items-center justify-center text-slate-600 text-sm">No activity data yet</div>
           )}
-        </Card>
+        </div>
 
-        <Card className="bg-zinc-900 border-zinc-800 ring-0">
-          <Text className="text-zinc-400 mb-4">Issue Types (Last 30 Days)</Text>
-          {issueTypeData.length > 0 ? (
-            <div className="flex items-center gap-6">
-              <DonutChart
-                className="h-48 w-48 flex-shrink-0"
-                data={issueTypeData}
-                category="value"
-                index="name"
-                variant="donut"
-                colors={["blue", "cyan", "amber", "red", "rose", "emerald", "violet"]}
-                showLabel
-                showAnimation
-              />
-              <div className="flex flex-col gap-1.5 text-xs">
-                {issueTypeData.map((item, i) => {
-                  const colors = ["#3b82f6", "#06b6d4", "#f59e0b", "#ef4444", "#f43f5e", "#10b981", "#8b5cf6"];
-                  return (
-                    <span key={item.name} className="flex items-center gap-2 text-zinc-300">
-                      <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: colors[i % colors.length] }} />
-                      <span className="capitalize">{item.name}</span>
-                      <span className="text-zinc-500 ml-auto">{item.value}</span>
-                    </span>
-                  );
-                })}
-              </div>
+        {/* Issue Types — 2 cols, horizontal bars */}
+        <div className="lg:col-span-2 glass-card rounded-xl p-5">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-slate-500 mb-4">Issue Types</p>
+          {issueTypes.length > 0 ? (
+            <div className="space-y-2.5">
+              {issueTypes.map((item, i) => {
+                const pct = issueTotal > 0 ? (item.value / issueTotal) * 100 : 0;
+                const color = ISSUE_COLORS[i % ISSUE_COLORS.length];
+                return (
+                  <div key={item.name}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs text-slate-300 capitalize">{item.name}</span>
+                      <span className="text-xs text-slate-500 tabular-nums">{item.value}</span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{ width: `${pct}%`, backgroundColor: color }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           ) : (
-            <p className="text-zinc-500 text-sm">No data yet</p>
+            <div className="h-44 flex items-center justify-center text-slate-600 text-sm">No findings yet</div>
           )}
-        </Card>
+        </div>
       </div>
 
-      <Card className="bg-zinc-900 border-zinc-800 ring-0">
-        <Text className="text-zinc-400 mb-4">Recent Reviews</Text>
+      {/* Recent Reviews */}
+      <div className="glass-card rounded-xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-white/[0.06]">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-slate-500">Recent Reviews</p>
+        </div>
         {reviews.length > 0 ? (
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-zinc-500 border-b border-zinc-800">
-                <th className="text-left py-2 font-medium">PR</th>
-                <th className="text-left py-2 font-medium">Repo</th>
-                <th className="text-left py-2 font-medium">Status</th>
-                <th className="text-left py-2 font-medium">Date</th>
+              <tr className="text-slate-500 border-b border-white/[0.04]">
+                <th className="text-left px-5 py-2.5 font-medium text-[11px] uppercase tracking-wider">PR</th>
+                <th className="text-left px-5 py-2.5 font-medium text-[11px] uppercase tracking-wider">Repo</th>
+                <th className="text-left px-5 py-2.5 font-medium text-[11px] uppercase tracking-wider">Status</th>
+                <th className="text-left px-5 py-2.5 font-medium text-[11px] uppercase tracking-wider">Date</th>
               </tr>
             </thead>
             <tbody>
               {reviews.map((r) => (
-                <tr key={r.id} className="border-b border-zinc-800/50">
-                  <td className="py-2 text-white">#{r.prId}</td>
-                  <td className="py-2 text-zinc-300">{r.repoId.slice(0, 8)}...</td>
-                  <td className="py-2">
-                    <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
-                      r.status === "completed" ? "bg-green-900/50 text-green-400" :
-                      r.status === "failed" ? "bg-red-900/50 text-red-400" :
-                      "bg-yellow-900/50 text-yellow-400"
+                <tr key={r.id} className="border-b border-white/[0.03] hover:bg-white/[0.02] transition-colors">
+                  <td className="px-5 py-3 text-white font-medium">#{r.prId}</td>
+                  <td className="px-5 py-3 text-slate-400 font-mono text-xs">{r.repoId.slice(0, 8)}</td>
+                  <td className="px-5 py-3">
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                      r.status === "completed" ? "bg-emerald-500/10 text-emerald-400" :
+                      r.status === "failed" ? "bg-red-500/10 text-red-400" :
+                      "bg-amber-500/10 text-amber-400"
                     }`}>
+                      <span className={`w-1 h-1 rounded-full ${
+                        r.status === "completed" ? "bg-emerald-400" :
+                        r.status === "failed" ? "bg-red-400" : "bg-amber-400"
+                      }`} />
                       {r.status}
                     </span>
                   </td>
-                  <td className="py-2 text-zinc-400">{new Date(r.createdAt).toLocaleDateString()}</td>
+                  <td className="px-5 py-3 text-slate-500 text-xs">{new Date(r.createdAt).toLocaleDateString()}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         ) : (
-          <p className="text-zinc-500 text-sm">No reviews yet. Create a PR to trigger your first review.</p>
+          <div className="px-5 py-8 text-center text-slate-600 text-sm">
+            No reviews yet. Create a PR to trigger your first review.
+          </div>
         )}
-      </Card>
+      </div>
     </div>
   );
 }
